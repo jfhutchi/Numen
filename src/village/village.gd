@@ -89,6 +89,12 @@ const JOB_COLOURS: Dictionary = {
 ## take twenty minutes.
 @export var auto_simulate: bool = true
 
+## Where to look for somewhere to settle. The search still requires dry land all
+## round, so an unsuitable origin simply falls back to the island centre — this
+## biases the search, it does not force a bad site. Set it to put a second
+## village somewhere other than on top of the first.
+@export var search_origin: Vector3 = Vector3.ZERO
+
 var store: VillageStore
 var centre: Vector3 = Vector3.ZERO
 ## Acts of worship completed. A village statistic, not a resource: the prayer
@@ -452,7 +458,8 @@ func _spawn(at: Vector3, spread: float) -> Villager:
 	)
 	villager.object = _registry.add(TYPE_VILLAGER, spot)
 	villager.visual = _capsule(_job_colour(job))
-	villager.visual.position = spot
+	villager.visual_lift = _visual_half_height(villager.visual)
+	villager.visual.position = spot + Vector3.UP * villager.visual_lift
 	add_child(villager.visual)
 	_villagers.append(villager)
 	return villager
@@ -543,9 +550,27 @@ func _nearest_of(objects: Array[WorldObject], from: Vector3) -> WorldObject:
 func _register(type: StringName, at: Vector3, visual: Node3D) -> WorldObject:
 	var object: WorldObject = _registry.add(type, at)
 	if visual != null:
-		visual.position = at
+		# Lifted by half its own height. Box and capsule meshes are centred on
+		# their origin, so placing one at ground level buries the lower half and
+		# a house reads as a flat slab sunk into the hillside.
+		visual.position = at + Vector3.UP * _visual_half_height(visual)
 		add_child(visual)
 	return object
+
+
+## Half the height of a primitive mesh, for sitting it on the ground rather than
+## through it.
+func _visual_half_height(visual: Node3D) -> float:
+	var instance := visual as MeshInstance3D
+	if instance == null or instance.mesh == null:
+		return 0.0
+	var box := instance.mesh as BoxMesh
+	if box != null:
+		return box.size.y * 0.5
+	var capsule := instance.mesh as CapsuleMesh
+	if capsule != null:
+		return capsule.height * 0.5
+	return 0.0
 
 
 ## A dry, gently sloped spot with land all round it for the fields.
@@ -554,8 +579,10 @@ func _find_centre() -> Vector3:
 		return Vector3.ZERO
 	var half: float = float(_island.extent) * tunables.centre_search_fraction
 	for attempt in 96:
-		var x: float = _rng.randf_range(-half, half)
-		var z: float = _rng.randf_range(-half, half)
+		# Biased around search_origin so a second village can be settled away
+		# from the first. Left at Vector3.ZERO this is the original behaviour.
+		var x: float = search_origin.x + _rng.randf_range(-half, half)
+		var z: float = search_origin.z + _rng.randf_range(-half, half)
 		var h: float = ground_height(x, z)
 		if h > 2.0 and h < 12.0 and _land_all_round(x, z, tunables.field_ring_radius):
 			return Vector3(x, h, z)

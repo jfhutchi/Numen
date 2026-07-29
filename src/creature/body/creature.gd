@@ -33,6 +33,7 @@ const LEASH_BIAS: Dictionary = {
 @export var idle_per_second: float = 0.05
 
 var mind: CreatureMind
+var animator: CreatureAnimator
 var leash: StringName = LEASH_NONE
 
 var _island: Node3D
@@ -61,6 +62,14 @@ func _ready() -> void:
 		# Standing alone in a scene with no configure() call; still functional.
 		mind = CreatureMind.new()
 
+	animator = CreatureAnimator.new()
+	animator.name = "Animator"
+	# Driven explicitly from _physics_process below. Self-ticking as well would
+	# advance the animation twice per frame at an invisible half-speed offset.
+	animator.auto_advance = false
+	add_child(animator)
+	animator.configure(get_node_or_null(^"Body") as Node3D)
+
 
 func set_leash(new_leash: StringName) -> void:
 	leash = new_leash
@@ -75,6 +84,8 @@ func set_leash(new_leash: StringName) -> void:
 func pet() -> void:
 	mind.apply_player_feedback(1.0)
 	_flash_with(Color(0.4, 1.0, 0.5))
+	if animator != null:
+		animator.request_state(&"celebrate")
 	feedback_shown.emit(1.0)
 
 
@@ -82,6 +93,8 @@ func pet() -> void:
 func slap() -> void:
 	mind.apply_player_feedback(-1.0)
 	_flash_with(Color(1.0, 0.35, 0.3))
+	if animator != null:
+		animator.request_state(&"hurt")
 	feedback_shown.emit(-1.0)
 
 
@@ -118,6 +131,10 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 	_tick_flash(delta)
 
+	if animator != null:
+		animator.set_locomotion_speed(Vector2(velocity.x, velocity.z).length())
+		animator.advance(delta)
+
 
 func _decide() -> void:
 	var choice: CreatureMind.Option = mind.choose()
@@ -136,6 +153,8 @@ func _decide() -> void:
 func _perform(option: CreatureMind.Option) -> void:
 	mind.perform(option)
 	acted_on.emit(option.action, option.object)
+	if animator != null:
+		animator.request_state(CreatureActionStates.for_action(option.action))
 
 	# Intrinsic consequences: what the world says back, with no player involved.
 	if option.object == null:

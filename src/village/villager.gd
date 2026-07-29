@@ -41,6 +41,9 @@ const JOBS: Array[StringName] = [FARMER, FORESTER, BUILDER, BREEDER, PRIEST]
 var object: WorldObject = null
 ## Scene puppet, or null when the village is running headless.
 var visual: Node3D = null
+## How far above its ground position the puppet sits. Primitive meshes are
+## centred on their origin, so without this a villager walks buried to the waist.
+var visual_lift: float = 0.0
 
 var job: StringName = FARMER
 var position: Vector3 = Vector3.ZERO
@@ -398,7 +401,7 @@ func _sync_record() -> void:
 		else:
 			object.position = position
 	if visual != null and is_instance_valid(visual):
-		visual.position = position
+		visual.position = position + Vector3.UP * visual_lift
 
 
 ## Whether the body the hand hung on this villager has finished moving.
