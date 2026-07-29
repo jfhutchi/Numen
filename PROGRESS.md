@@ -60,7 +60,7 @@ presentation layer runs short, which is what "never cut items 5, 6, 7" actually 
 
 | Phase | Name | Acceptance test | Status |
 | --- | --- | --- | --- |
-| 0 | Scaffold | `tools/ci.sh` exits 0 on a clean clone | ⏳ in progress |
+| 0 | Scaffold | `tools/ci.sh` exits 0 on a clean clone | ✅ done |
 | 1 | World & Hand | thrown body lands within tolerance of ballistic prediction | ⬜ not started |
 | 4 | **Creature Mind** | perceptron converges; ID3 learns pattern; **creature unlearns punished behaviour**; learned state round-trips | ⬜ not started |
 | 2 | Village Sim | 20-min headless sim, pop 8 → ≥12, no deadlock/NaN, store never negative | ⬜ not started |
@@ -141,18 +141,79 @@ Conversion, win condition, HUD, audio, perf.
 
 ## 6. Phase log
 
-### Phase 0 — Scaffold — ⏳ in progress
+### Phase 0 — Scaffold — ✅ done (2026-07-29)
 
-Started 2026-07-29. Docs written first per protocol, committed before any game code.
+Docs committed before any game code (`5f1c1b6`). GUT vendored from `main` at commit
+`c80954f4` (version 9.6.1 — the 9.7.1 tag targets Godot 4.7 and would not run here). Repo
+structure, `project.godot`, boot scene, `tools/ci.sh`, `tools/check_licenses.sh`.
 
-Test output: _pending — `tools/ci.sh` has not been run yet._
+**Both CI gates were verified in both directions** — a check that cannot go red is worthless:
+
+| Gate | Green case | Red case |
+| --- | --- | --- |
+| `check_licenses.sh` | empty tree → `exit 0`; planted file with a logged parent dir → `exit 0` | planted unattributed file → `FAIL: assets/third_party/_probe/unlogged.png has no entry`, `exit 1` |
+| `ci.sh` tests | clean suite → `exit 0` | planted failing test → `Failing Tests 1`, `FAIL: gut exited 1`, `exit 1` |
+
+Real output of `tools/ci.sh` on a clean tree (ANSI stripped):
+
+```
+== NUMEN CI ==
+godot: .../Godot_v4.6.3-stable_mono_win64_console.exe
+4.6.3.stable.mono.official.7d41c59c4
+
+-- licences --
+licences: 0 third-party file(s) checked, all attributed
+
+-- import check --
+WARNING: ObjectDB instances leaked at exit (run with --verbose for details).
+   at: cleanup (core/object/object.cpp:2663)
+import: ok
+
+-- tests --
+---  GUT  ---
+Godot version:  4.6.3
+GUT version:  9.6.1
+
+res://tests/unit/test_project_config.gd
+* test_main_scene_is_the_configured_entry_point
+* test_main_scene_loads_and_instantiates
+* test_physics_backend_is_pinned_explicitly
+* test_boot_report_is_populated
+4/4 passed.
+
+Totals
+------
+Scripts               1
+Tests                 4
+Passing Tests         4
+Asserts               7
+Time              0.638s
+
+---- All tests passed! ----
+
+== CI OK ==
+```
 
 ## 7. Known issues
 
-_None recorded yet._
+- **The active 3D physics backend cannot be confirmed from headless output.** Godot 4.6 exposes
+  no runtime identifier for it: `ProjectSettings` reports the literal string `DEFAULT`,
+  `PhysicsServer3D.get_class()` returns the binding name `PhysicsServer3D`, and `--verbose`
+  startup says nothing. Worse, feeding it a **deliberately bogus** engine name produced no error
+  or warning at all — so "it started without complaining" proves nothing. We therefore pin
+  `physics/3d/physics_engine="Jolt Physics"` explicitly and guard the pin with
+  `test_physics_backend_is_pinned_explicitly`. The pin is the source of truth; that Jolt is the
+  one actually executing is *asserted, not yet observed*. Confirm visually in the editor's
+  Project Settings during the Phase 1 manual smoke run.
+- `--import` emits `ObjectDB instances leaked at exit` on a cold cache. Benign Godot headless
+  behaviour, exit code is 0. Noted so nobody chases it later.
+- `--quit` is **not** sufficient as an import check: it imports resources but does not register
+  script `class_name`s, so GUT aborts with "Some GUT class_names have not been imported".
+  `tools/ci.sh` uses `--import`.
 
 ---
 
-**NEXT ACTION:** Create `project.godot`, vendor `addons/gut` from its `main` branch, write
-`tools/ci.sh` and `tools/check_licenses.sh`, then run `tools/ci.sh` and paste the real output
-into §6 above.
+**NEXT ACTION:** Begin Phase 1 (World & Hand): `src/core/rng.gd` seeded RNG service, then
+`src/world/island.gd` (FastNoiseLite heightmap → `ArrayMesh` + `HeightMapShape3D`), water plane,
+MultiMesh trees/rocks, orbit/zoom camera, and `src/hand/hand.gd` grab/throw. Acceptance test:
+headless assertion that a thrown body lands within tolerance of a ballistic prediction.

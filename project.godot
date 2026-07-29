@@ -1,0 +1,27 @@
+; Engine configuration file.
+; NUMEN — see README.md, PROGRESS.md, DECISIONS.md
+
+config_version=5
+
+[application]
+
+config/name="NUMEN"
+config/description="An original god-game built around a creature that genuinely learns."
+run/main_scene="res://src/core/main.tscn"
+config/features=PackedStringArray("4.6", "Forward Plus")
+
+[debug]
+
+gdscript/warnings/untyped_declaration=1
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/gut/plugin.cfg")
+
+[rendering]
+
+renderer/rendering_method="forward_plus"
+
+[physics]
+
+3d/physics_engine="Jolt Physics"

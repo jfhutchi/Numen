@@ -138,3 +138,35 @@ away the graded confidence that belief updating depends on.
 **Consequences.** Slightly coarser trees than optimal splitting would give. Bin edges become a
 tuning surface that can mask or cause learning failures, so they are exported and documented.
 Revisit if a learning failure traces to binning rather than to data.
+
+---
+
+## ADR-007 — Pin the 3D physics backend explicitly; treat the pin as the only source of truth
+
+**Date:** 2026-07-29
+
+**Context.** Godot 4.6 is documented as defaulting new projects to Jolt, and we wanted to confirm
+it rather than assume it. It turned out not to be confirmable from headless output:
+
+- `ProjectSettings.get_setting("physics/3d/physics_engine")` returns the literal string
+  `DEFAULT`, whose resolution is not exposed.
+- `PhysicsServer3D.get_class()` returns `PhysicsServer3D` — the binding name, not the backend.
+- `--verbose` startup logs say nothing about the physics backend.
+- Decisively: feeding the setting a **deliberately bogus** engine name produced no error and no
+  warning. So "it booted without complaining" carries zero information.
+
+**Decision.** Pin `physics/3d/physics_engine="Jolt Physics"` explicitly in `project.godot` rather
+than leaving it on `DEFAULT`, and guard the pin with
+`test_physics_backend_is_pinned_explicitly`. Record in `PROGRESS.md` that Jolt being the backend
+actually executing is **asserted, not observed**, to be confirmed visually in the editor's
+Project Settings during the Phase 1 manual smoke run.
+
+**Rejected.** Leaving it on `DEFAULT` — the value is undocumented at runtime and could shift with
+an engine patch release, silently changing physics behaviour underneath the creature and the
+Phase 1 ballistic test with nothing going red. Asserting "Jolt confirmed" on the strength of a
+clean boot — the bogus-name control proves that inference is unsound, and writing it down as
+confirmed would be a false claim in the project's own record.
+
+**Consequences.** One more guarded setting. An honest gap stays open in `PROGRESS.md` until
+someone eyeballs Project Settings. The Phase 1 ballistic test exercises whichever backend is
+live and asserts correct behaviour regardless, so the gap does not block progress.

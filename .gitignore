@@ -21,3 +21,6 @@ export_presets.cfg
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Machine-local Godot path used by tools/ci.sh
+tools/godot_bin.local
