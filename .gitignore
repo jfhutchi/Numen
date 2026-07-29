@@ -1,0 +1,23 @@
+# Godot 4 — engine cache and imported artifacts
+.godot/
+/build/
+*.translation
+
+# Godot .NET / mono build output (editor is a mono build; we ship GDScript)
+.mono/
+data_*/
+mono_crash.*.json
+bin/
+obj/
+*.csproj.user
+
+# Local-only export config (contains machine paths)
+export_presets.cfg
+
+# Test/CI scratch
+/tests/_out/
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
