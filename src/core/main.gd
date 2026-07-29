@@ -478,7 +478,7 @@ static func boot_report() -> PackedStringArray:
 		"Godot %s" % Engine.get_version_info().get("string", "unknown"),
 		"3D physics: %s" % physics_engine_name(),
 		"",
-		"Left mouse: grab / throw    Right mouse: orbit    Wheel: zoom    Arrows: pan",
+		"Left mouse: grab / throw    Right mouse: orbit    Wheel: zoom    WASD/arrows: pan",
 		"Middle mouse drag: draw a miracle gesture",
 		"P: pet    L: slap    1-4: leash    F: find creature    V: find village",
 		"Tab: mind inspector    F5: save    F9: load",

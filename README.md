@@ -25,7 +25,8 @@ WASM, so it looks a little plainer and runs slower than the desktop build — se
 | --- | --- |
 | Left mouse | Grab and throw — trees, rocks, food, villagers |
 | Right mouse drag | Orbit the camera |
-| Wheel / Arrow keys | Zoom / pan |
+| Wheel | Zoom |
+| **WASD** or arrow keys | Pan — relative to the camera, so "forward" is always into the screen however you have orbited |
 | **Middle mouse drag** | Draw a miracle gesture — spiral food, chevron wood, wave water, circle heal, bolt lightning |
 | **P** / **L** | Pet (reward) / slap (punish) the creature |
 | **1–4** | Leash: none / learning / compassion / aggression |

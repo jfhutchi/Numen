@@ -63,23 +63,78 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
-	var move := Vector2(
-		Input.get_axis(&"ui_left", &"ui_right"), Input.get_axis(&"ui_up", &"ui_down")
-	)
+	var move: Vector2 = pan_input()
 	if move != Vector2.ZERO:
-		# Pan relative to where the camera is looking, and scale with zoom so a
-		# drag covers the same fraction of the screen at every distance.
-		var forward := Vector3(sin(_yaw), 0.0, cos(_yaw))
-		var right := Vector3(forward.z, 0.0, -forward.x)
-		var speed: float = pan_speed * delta * (_distance / start_distance)
-		_focus += (right * move.x - forward * move.y) * speed
-		_focus.x = clampf(_focus.x, -pan_limit, pan_limit)
-		_focus.z = clampf(_focus.z, -pan_limit, pan_limit)
+		pan(move, delta)
 
 	if _island != null:
 		_focus.y = maxf(_island.height_at(_focus.x, _focus.z), 0.0)
 
 	_apply(clampf(delta * smoothing, 0.0, 1.0))
+
+
+## Pan input as a screen-space direction: x is right, y is *down*, matching
+## Godot's own `ui_up`/`ui_down` convention.
+func pan_input() -> Vector2:
+	var axis := Vector2(
+		Input.get_axis(&"ui_left", &"ui_right"), Input.get_axis(&"ui_up", &"ui_down")
+	)
+	# WASD alongside the arrows. Physical keycodes, so the cluster keeps its
+	# shape on AZERTY and Dvorak instead of scattering across the keyboard.
+	if Input.is_physical_key_pressed(KEY_A):
+		axis.x -= 1.0
+	if Input.is_physical_key_pressed(KEY_D):
+		axis.x += 1.0
+	if Input.is_physical_key_pressed(KEY_W):
+		axis.y -= 1.0
+	if Input.is_physical_key_pressed(KEY_S):
+		axis.y += 1.0
+	# Limited rather than normalised so a single key still gives full speed while
+	# two together do not add up to 1.41x.
+	return axis.limit_length(1.0)
+
+
+## Slides the focus point across the ground, in the directions the player sees
+## on screen. Separated from _process so the mapping can be tested without
+## synthesising input.
+func pan(move: Vector2, delta: float) -> void:
+	var directions: Array[Vector3] = pan_basis()
+	# move.y is screen-down, so it is subtracted: pressing up goes forward.
+	var displacement: Vector3 = directions[0] * move.x - directions[1] * move.y
+	# Scaled with zoom so a keypress covers the same fraction of the screen
+	# whether you are looking at one hut or the whole island.
+	var speed: float = pan_speed * delta * (_distance / maxf(start_distance, 0.001))
+	_focus += displacement * speed
+	_focus.x = clampf(_focus.x, -pan_limit, pan_limit)
+	_focus.z = clampf(_focus.z, -pan_limit, pan_limit)
+
+
+## The ground-plane [right, forward] the camera is currently looking along.
+##
+## Taken from the camera's own basis rather than rebuilt from `_yaw` with trig.
+## The previous version did the latter and got the sign wrong: `forward` actually
+## pointed from the focus back toward the camera, so pressing up panned
+## backwards, and `right` was only correct because a second sign error cancelled
+## the first. Reading the transform is correct by construction and stays correct
+## if the rig's maths ever changes.
+func pan_basis() -> Array[Vector3]:
+	if camera == null:
+		return [Vector3.RIGHT, Vector3.FORWARD]
+
+	var basis: Basis = camera.global_transform.basis
+	var forward: Vector3 = -basis.z
+	forward.y = 0.0
+	if forward.length_squared() < 0.000001:
+		# Looking almost straight down, where -Z collapses onto the ground plane.
+		# The camera's +Y is screen-up, which is what the player means by forward.
+		forward = basis.y
+		forward.y = 0.0
+	if forward.length_squared() < 0.000001:
+		return [Vector3.RIGHT, Vector3.FORWARD]
+	forward = forward.normalized()
+
+	# Right-handed, Y up: rotating the ground forward -90 degrees about Y.
+	return [Vector3(-forward.z, 0.0, forward.x), forward]
 
 
 func _zoom(amount: float) -> void:
