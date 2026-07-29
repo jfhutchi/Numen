@@ -79,6 +79,30 @@ func test_mesh_and_collision_are_built() -> void:
 		"expected a height-field shape, not a fallback")
 
 
+func test_ground_normals_point_up() -> void:
+	# Regression guard. The first build wound its triangles the wrong way round,
+	# which culled the entire island as backfaces and left generate_normals()
+	# pointing every normal at the sea floor. Nothing in the suite noticed —
+	# only a screenshot did. Winding is invisible to every other assertion here,
+	# so it gets its own.
+	var mesh_instance: MeshInstance3D = _island.get_node_or_null(^"IslandMesh")
+	assert_not_null(mesh_instance)
+	if mesh_instance == null:
+		return
+
+	var arrays: Array = mesh_instance.mesh.surface_get_arrays(0)
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	assert_gt(normals.size(), 0, "mesh should carry normals")
+
+	var upward: int = 0
+	for normal: Vector3 in normals:
+		if normal.dot(Vector3.UP) > 0.0:
+			upward += 1
+	var fraction: float = float(upward) / float(normals.size())
+	gut.p("normals facing up: %.1f%%" % (fraction * 100.0))
+	assert_gt(fraction, 0.99, "ground normals should face the sky, not the sea floor")
+
+
 func test_collision_heightfield_matches_the_rendered_heights() -> void:
 	# If these ever diverge, things land on invisible ground.
 	var collision: CollisionShape3D = _island.get_node_or_null(^"IslandBody/IslandCollision")

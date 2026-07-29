@@ -13,6 +13,7 @@ config/features=PackedStringArray("4.6", "Forward Plus")
 [autoload]
 
 Rng="*res://src/core/rng.gd"
+World="*res://src/world/object_registry.gd"
 
 [debug]
 

@@ -1,0 +1,242 @@
+extends Node3D
+## The divine hand: the player's only cursor.
+##
+## Picks by proximity to the ground point under the mouse rather than by hitting
+## a collider, because scenery lives in a MultiMesh and has no collider until it
+## is picked up. It also suits the feel — a god's hand closes around whatever is
+## roughly there, it does not need pixel-accurate aim.
+
+signal grabbed(object: WorldObject)
+signal released(object: WorldObject, throw_velocity: Vector3)
+
+const GRABBABLE: Array = [&"tree", &"rock", &"villager", &"food_pile"]
+## Frames of hand travel averaged into a throw. One frame of mouse jitter is
+## enough to send a rock somewhere the player did not aim; a short window
+## removes that without adding perceptible lag.
+const VELOCITY_WINDOW := 6
+
+@export var grab_radius: float = 5.0
+@export var carry_height: float = 4.0
+@export var follow_stiffness: float = 20.0
+@export var max_throw_speed: float = 40.0
+## Hands release a fraction faster than they travel; without a little boost
+## throws feel limp.
+@export var throw_boost: float = 1.2
+
+var _camera: Camera3D
+var _island: Node3D
+var _scatter: Node3D
+var _registry: Node
+
+var _held: WorldObject = null
+var _held_body: RigidBody3D = null
+var _ground_target: Vector3 = Vector3.ZERO
+var _positions: Array[Vector3] = []
+var _deltas: Array[float] = []
+
+
+func configure(camera: Camera3D, island: Node3D, scatter: Node3D, registry: Node) -> void:
+	_camera = camera
+	_island = island
+	_scatter = scatter
+	_registry = registry
+
+
+func held_object() -> WorldObject:
+	return _held
+
+
+func is_holding() -> bool:
+	return _held != null
+
+
+## Where the hand currently is in the world.
+func hand_point() -> Vector3:
+	return _ground_target
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var button := event as InputEventMouseButton
+		if button.button_index == MOUSE_BUTTON_LEFT:
+			if button.pressed:
+				grab_at(_ground_target)
+			else:
+				release()
+
+
+func _physics_process(delta: float) -> void:
+	if _camera != null:
+		_ground_target = _pointer_ground_point()
+
+	if _held_body != null and is_instance_valid(_held_body):
+		var goal: Vector3 = _ground_target + Vector3.UP * carry_height
+		var step: float = clampf(follow_stiffness * delta, 0.0, 1.0)
+		_held_body.global_position = _held_body.global_position.lerp(goal, step)
+		_track(_held_body.global_position, delta)
+	else:
+		_track(_ground_target, delta)
+
+
+## Closes the hand on the nearest grabbable object. Returns true if it caught
+## something. Callable without a mouse so the throw path can be tested headless.
+func grab_at(point: Vector3) -> bool:
+	if _held != null or _registry == null:
+		return false
+	var object: WorldObject = _registry.nearest(point, grab_radius, GRABBABLE)
+	if object == null:
+		return false
+
+	_held = object
+	_held_body = _acquire_body(object)
+	if _held_body == null:
+		_held = null
+		return false
+
+	_held_body.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
+	_held_body.freeze = true
+	_positions.clear()
+	_deltas.clear()
+	grabbed.emit(object)
+	return true
+
+
+## Opens the hand, throwing whatever it held with the hand's recent velocity.
+func release() -> Vector3:
+	if _held == null:
+		return Vector3.ZERO
+
+	var velocity: Vector3 = smoothed_velocity() * throw_boost
+	if velocity.length() > max_throw_speed:
+		velocity = velocity.normalized() * max_throw_speed
+
+	var object: WorldObject = _held
+	if _held_body != null and is_instance_valid(_held_body):
+		_held_body.freeze = false
+		_held_body.linear_velocity = velocity
+
+	_held = null
+	_held_body = null
+	released.emit(object, velocity)
+	return velocity
+
+
+## Hand velocity over the sample window, as a trimmed mean of the per-frame
+## velocities with the single fastest sample discarded.
+##
+## Plain displacement-over-window was tried first and is not good enough: it
+## only divides an outlier by the window length, so one stray frame still read
+## as 60 m/s sideways and steered the whole throw. Mouse input spikes for one
+## frame at a time, so dropping exactly one sample removes the common case while
+## leaving steady motion untouched.
+func smoothed_velocity() -> Vector3:
+	var count: int = _positions.size()
+	if count < 2:
+		return Vector3.ZERO
+
+	var velocities: Array[Vector3] = []
+	for i in range(1, count):
+		var dt: float = _deltas[i]
+		if dt > 0.0:
+			velocities.append((_positions[i] - _positions[i - 1]) / dt)
+
+	if velocities.is_empty():
+		return Vector3.ZERO
+	# Too few samples to spare one; trimming here would throw away the signal.
+	if velocities.size() < 3:
+		return velocities[velocities.size() - 1]
+
+	var fastest: int = 0
+	for i in velocities.size():
+		if velocities[i].length_squared() > velocities[fastest].length_squared():
+			fastest = i
+
+	var total := Vector3.ZERO
+	for i in velocities.size():
+		if i != fastest:
+			total += velocities[i]
+	return total / float(velocities.size() - 1)
+
+
+## Exposed so tests can feed a known motion without a mouse or a frame loop.
+func track_sample(point: Vector3, delta: float) -> void:
+	_track(point, delta)
+
+
+## Where the mouse ray meets the world.
+##
+## Prefers a physics hit on the terrain, and falls back to the sea plane so the
+## hand still has a sensible position when the player points at open sky.
+func _pointer_ground_point() -> Vector3:
+	var viewport := get_viewport()
+	if viewport == null or _camera == null:
+		return _ground_target
+
+	var mouse: Vector2 = viewport.get_mouse_position()
+	var from: Vector3 = _camera.project_ray_origin(mouse)
+	var direction: Vector3 = _camera.project_ray_normal(mouse)
+
+	var query := PhysicsRayQueryParameters3D.create(from, from + direction * 2000.0)
+	query.collide_with_areas = false
+	# Without this the ray hits whatever is currently in the hand, and the held
+	# object chases its own shadow away from the cursor.
+	if _held_body != null and is_instance_valid(_held_body):
+		query.exclude = [_held_body.get_rid()]
+
+	var hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.has("position"):
+		return hit["position"]
+
+	if absf(direction.y) > 0.0001:
+		var distance: float = -from.y / direction.y
+		if distance > 0.0:
+			return from + direction * distance
+	return _ground_target
+
+
+func _track(point: Vector3, delta: float) -> void:
+	if delta <= 0.0:
+		return
+	_positions.append(point)
+	_deltas.append(delta)
+	while _positions.size() > VELOCITY_WINDOW:
+		_positions.remove_at(0)
+		_deltas.remove_at(0)
+
+
+## Finds or builds the physics body for an object being picked up.
+func _acquire_body(object: WorldObject) -> RigidBody3D:
+	if object.node != null and is_instance_valid(object.node) and object.node is RigidBody3D:
+		return object.node as RigidBody3D
+	if _scatter == null:
+		return null
+
+	var body := RigidBody3D.new()
+	body.name = "Detached_%d" % object.id
+	# The project default linear damp would bleed speed out of a throw; a thrown
+	# rock should follow the same arc the ballistic test asserts.
+	body.linear_damp_mode = RigidBody3D.DAMP_MODE_REPLACE
+	body.linear_damp = 0.0
+	body.angular_damp_mode = RigidBody3D.DAMP_MODE_REPLACE
+	body.angular_damp = 0.4
+
+	var extents: Vector3 = _scatter.detached_extents(object)
+	var shape := BoxShape3D.new()
+	shape.size = extents * 2.0
+	var collision := CollisionShape3D.new()
+	collision.shape = shape
+	collision.position = Vector3.UP * extents.y
+	body.add_child(collision)
+	body.add_child(_scatter.build_detached_visual(object))
+
+	# Parented to the hand's own parent rather than to current_scene, which is
+	# null outside a booted game (headless test runs, tool scripts).
+	var container: Node = get_parent()
+	if container == null:
+		container = self
+	container.add_child(body)
+	body.global_position = object.current_position()
+
+	_scatter.hide_instance(object)
+	object.node = body
+	return body

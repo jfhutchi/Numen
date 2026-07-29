@@ -133,12 +133,15 @@ func _build_mesh() -> void:
 			var top_right: int = top_left + 1
 			var bottom_left: int = top_left + resolution
 			var bottom_right: int = bottom_left + 1
+			# Winding matters twice over: the wrong order culls the whole island
+			# as backfaces, and generate_normals() then points every normal at
+			# the sea floor so what does show is lit only by ambient.
 			surface.add_index(top_left)
-			surface.add_index(bottom_left)
-			surface.add_index(top_right)
 			surface.add_index(top_right)
 			surface.add_index(bottom_left)
+			surface.add_index(top_right)
 			surface.add_index(bottom_right)
+			surface.add_index(bottom_left)
 
 	surface.generate_normals()
 
@@ -169,12 +172,20 @@ func _build_collision() -> void:
 	_collision.scale = Vector3(cell_size(), 1.0, cell_size())
 
 
+## Ground tint by altitude.
+##
+## Converted to linear because the renderer consumes vertex colours as linear
+## values: handed sRGB numbers directly, a 0.35 green displays as a washed-out
+## mint and the rock band reads as snow.
 func _colour_for_height(h: float) -> Color:
-	if h < 0.4:
-		return Color(0.76, 0.70, 0.50)  # sand
-	if h > height_scale * 0.62:
-		return Color(0.55, 0.54, 0.52)  # exposed rock
-	return Color(0.35, 0.49, 0.24).lerp(Color(0.42, 0.55, 0.28), fmod(h, 1.0))
+	var colour: Color
+	if h < 1.2:
+		colour = Color(0.78, 0.71, 0.50)  # sand
+	elif h > height_scale * 0.66:
+		colour = Color(0.46, 0.44, 0.42)  # exposed rock
+	else:
+		colour = Color(0.28, 0.42, 0.18).lerp(Color(0.36, 0.50, 0.22), fmod(h, 1.0))
+	return colour.srgb_to_linear()
 
 
 func _ground_material() -> StandardMaterial3D:

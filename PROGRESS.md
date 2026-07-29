@@ -61,7 +61,7 @@ presentation layer runs short, which is what "never cut items 5, 6, 7" actually 
 | Phase | Name | Acceptance test | Status |
 | --- | --- | --- | --- |
 | 0 | Scaffold | `tools/ci.sh` exits 0 on a clean clone | ✅ done |
-| 1 | World & Hand | thrown body lands within tolerance of ballistic prediction | ⬜ not started |
+| 1 | World & Hand | thrown body lands within tolerance of ballistic prediction | ✅ done |
 | 4 | **Creature Mind** | perceptron converges; ID3 learns pattern; **creature unlearns punished behaviour**; learned state round-trips | ⬜ not started |
 | 2 | Village Sim | 20-min headless sim, pop 8 → ≥12, no deadlock/NaN, store never negative | ⬜ not started |
 | 3 | Miracles & Gestures | recogniser ≥90% over ≥20 synthetic strokes per template | ⬜ not started |
@@ -194,6 +194,45 @@ Time              0.638s
 == CI OK ==
 ```
 
+### Phase 1 — World & Hand — ✅ done (2026-07-29)
+
+Seeded RNG service with independent named streams; procedural island (noise heightmap → ArrayMesh
++ `HeightMapShape3D`); MultiMesh scenery; orbit/zoom camera; divine hand with proximity grab,
+kinematic carry and smoothed-velocity throw. World object registry added early because it is the
+same seam the creature's perception will read in Phase 4.
+
+**Acceptance test — thrown body vs. closed-form ballistics:**
+
+```
+* test_thrown_body_follows_a_ballistic_arc
+    predicted landing: (20.35825, 0.5, -9.04811)
+    measured  landing: (20.2555, 0.5, -9.002449)
+    horizontal error : 0.1124 m (tolerance 0.40 m)
+* test_thrown_body_comes_to_rest_on_the_ground
+    resting position: (27.23427, 0.499992, -12.1041) (vy 0.0000)
+2/2 passed.
+```
+
+Full suite: `Scripts 6 | Tests 38 | Passing Tests 38 | Asserts 207 | Time 8.699s | CI OK`.
+
+**Manual smoke run:** `docs/captures/phase1_island.png` — island with grass, sand shoreline, rock
+outcrop, scattered trees and rocks, water, HUD. Boot log reports `Vulkan 1.4.341 - Forward+`.
+
+**Three bugs worth remembering, because of how each was caught:**
+
+1. *The terrain was invisible and no test noticed.* Triangle winding was reversed, so the whole
+   island was culled as backfaces — and `generate_normals()` had pointed every normal at the sea
+   floor, so what did show was lit by ambient only. Eight passing island tests said nothing;
+   a screenshot found it in one look. Now guarded by `test_ground_normals_point_up`. **Geometry
+   needs an eye on it, or an invariant that stands in for one.**
+2. *Vertex colours washed out.* The renderer consumes vertex colours as linear, so sRGB numbers
+   handed over directly rendered pale — the rock band looked like snow. Fixed with
+   `srgb_to_linear()` at the point of authoring.
+3. *Throw smoothing did not actually reject jitter.* Displacement-over-window only divides an
+   outlier by the window length; one stray frame still read as 60 m/s sideways. Replaced with a
+   trimmed mean that discards the single fastest sample — a 300 m/s spike now leaves the estimate
+   at exactly `(10, 0, 0)`.
+
 ## 7. Known issues
 
 - **The active 3D physics backend cannot be confirmed from headless output.** Godot 4.6 exposes
@@ -210,10 +249,25 @@ Time              0.638s
 - `--quit` is **not** sufficient as an import check: it imports resources but does not register
   script `class_name`s, so GUT aborts with "Some GUT class_names have not been imported".
   `tools/ci.sh` uses `--import`.
+- **MultiMesh instance data cannot be read back under `--headless`.** The dummy renderer discards
+  it, so `get_instance_transform()` always returns identity — verified in isolation, it is not a
+  bug in our code. `src/world/scatter.gd` therefore keeps its own authoritative transforms and
+  treats the MultiMesh as write-only. Better at runtime too, since reading back from the
+  rendering server stalls. **Do not write tests that read MultiMesh state.**
+- Autoload singletons must not be referenced by their global identifier (`World`, `Rng`) in
+  scripts that tests load directly — GDScript resolves them at compile time and the script fails
+  to compile wherever the autoload is not registered. Use `get_node(^"/root/World")`.
+- Detached props are parented to the hand's parent, not `get_tree().current_scene`, which is null
+  outside a booted game.
+- Thrown props stay as `RigidBody3D` after they come to rest rather than being reabsorbed into
+  the MultiMesh. Harmless at this scale; revisit if a player can litter the island with hundreds.
 
 ---
 
-**NEXT ACTION:** Begin Phase 1 (World & Hand): `src/core/rng.gd` seeded RNG service, then
-`src/world/island.gd` (FastNoiseLite heightmap → `ArrayMesh` + `HeightMapShape3D`), water plane,
-MultiMesh trees/rocks, orbit/zoom camera, and `src/hand/hand.gd` grab/throw. Acceptance test:
-headless assertion that a thrown body lands within tolerance of a ballistic prediction.
+**NEXT ACTION:** Begin Phase 4 — the creature mind, built third per ADR-003. Write
+`tests/behavioral/sim_harness.gd` **first** so learning can be iterated headless, then
+`src/creature/mind/`: `perceived_object.gd`, `world_view.gd` (`MockWorldView` +
+`SceneWorldView` over the registry at `src/world/object_registry.gd`), `belief_table.gd`
+(per-instance seeded from per-type priors, ADR-005), `perceptron.gd`, `desires.gd`, `id3.gd`
+(binned attributes, ADR-006), `opinion_store.gd`, `mind.gd`, `feedback.gd`, `mind_tunables.gd`.
+Keystone acceptance test: `test_creature_unlearns_punished_behavior`.
