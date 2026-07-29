@@ -10,6 +10,10 @@ config/description="An original god-game built around a creature that genuinely 
 run/main_scene="res://src/core/main.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 
+[autoload]
+
+Rng="*res://src/core/rng.gd"
+
 [debug]
 
 gdscript/warnings/untyped_declaration=1
