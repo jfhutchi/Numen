@@ -42,6 +42,17 @@ var age_seconds: float = 0.0
 ## Exponential moving average of the moral weight of what it has done.
 var alignment: float = 0.0
 
+## Per-desire multipliers, used by the leashes to lean the creature toward
+## compassion or aggression without overriding what it has actually learned.
+var desire_bias: Dictionary[StringName, float] = {}
+
+## The creature's own entry in the world registry, excluded from perception.
+##
+## Without this it finds itself at distance zero, reads its own type as a
+## nearby threat, and sits at Fear 0.73 for its entire life — frightened of
+## nobody but itself.
+var self_object_id: int = -1
+
 var _world: Object = null
 var _position: Vector3 = Vector3.ZERO
 var _rng := RandomNumberGenerator.new()
@@ -101,9 +112,12 @@ func situation() -> PackedFloat32Array:
 func perceive() -> Array[WorldObject]:
 	if _world == null:
 		return []
-	var seen: Array[WorldObject] = _world.query_near(_position, tunables.perception_radius)
-	for object: WorldObject in seen:
+	var seen: Array[WorldObject] = []
+	for object: WorldObject in _world.query_near(_position, tunables.perception_radius):
+		if object.id == self_object_id:
+			continue
 		beliefs.observe_truth(object)
+		seen.append(object)
 	return seen
 
 
@@ -124,7 +138,7 @@ func evaluate_options() -> Array[Option]:
 				option.desire = desire
 				option.action = action
 				option.object = object
-				option.desire_level = levels[desire]
+				option.desire_level = levels[desire] * float(desire_bias.get(desire, 1.0))
 				var belief: PackedFloat32Array = beliefs.belief_for(object)
 				option.opinion = opinions.predict(desire, action, belief)
 				option.distance = _position.distance_to(object.current_position())
@@ -329,11 +343,14 @@ func _assign_probabilities(options: Array[Option]) -> void:
 func _proximity(types: Array) -> float:
 	if _world == null:
 		return 0.0
-	var nearest: WorldObject = _world.nearest(_position, tunables.perception_radius, types)
-	if nearest == null:
+	var closest: float = INF
+	for object: WorldObject in _world.query_near(_position, tunables.perception_radius, types):
+		if object.id == self_object_id:
+			continue
+		closest = minf(closest, _position.distance_to(object.current_position()))
+	if is_inf(closest):
 		return 0.0
-	var distance: float = _position.distance_to(nearest.current_position())
-	return clampf(1.0 - distance / tunables.perception_radius, 0.0, 1.0)
+	return clampf(1.0 - closest / tunables.perception_radius, 0.0, 1.0)
 
 
 func to_dict() -> Dictionary:

@@ -65,7 +65,7 @@ presentation layer runs short, which is what "never cut items 5, 6, 7" actually 
 | 4 | **Creature Mind** | perceptron converges; ID3 learns pattern; **creature unlearns punished behaviour**; learned state round-trips | ✅ done |
 | 2 | Village Sim | 20-min headless sim, pop 8 → ≥12, no deadlock/NaN, store never negative | ⬜ not started |
 | 3 | Miracles & Gestures | recogniser ≥90% over ≥20 synthetic strokes per template | ⬜ not started |
-| 5 | Body & Inspector | manual run demonstrating DoD items 5 and 6 | ⬜ not started |
+| 5 | Body & Inspector | manual run demonstrating DoD items 5 and 6 | 🟡 partial — no animation FSM, no CC0 asset, no audio |
 | 6 | Alignment & Polish | DoD 1–8 demonstrable; ≥60fps @ 200 villagers | ⬜ not started |
 
 ## 4. Phase detail
@@ -288,6 +288,35 @@ creature was nearly indifferent to everything it knew. Exploration in a young cr
 come from temperature anyway — a blank mind predicts 0 for everything, so the softmax is uniform
 regardless.
 
+### Phase 5 — Creature Body & Mind Inspector — 🟡 partial (2026-07-29)
+
+**Done.** `src/creature/body/creature.gd` — CharacterBody3D driving `CreatureMind` on a jittered
+5 Hz tick, walking to its chosen object, performing the action on arrival and feeding intrinsic
+consequences back (eating something nutritious relieves hunger and rewards; eating a rock teaches
+otherwise). Three leashes (`1`–`4`) lean desires without overriding learning. `P` pets, `L` slaps,
+with a colour flash and alignment tinting the creature's skin.
+`src/ui/mind_inspector.gd` — live desire bars, the chosen `(action, object)` with its full score
+breakdown and probability, the real route through the firing opinion tree, and a feedback log.
+
+**Manual smoke run:** `docs/captures/phase5_mind_inspector.png`.
+
+**A bug only the inspector could have caught.** The creature registers in the world like any other
+object, so it perceived *itself* at distance zero, read its own type as a nearby threat, and sat at
+`Fear 0.73` for its entire life — frightened of nobody but itself. No test suspected it; the panel
+showed it at a glance. Now `Fear 0.12`, `Anger 0.12`, Hunger correctly dominant at `0.69`, and
+guarded by `test_creature_is_not_frightened_of_itself`. This is exactly the argument for the
+inspector being a required deliverable rather than a nicety.
+
+**Not done in this phase:**
+- **No animation state machine.** The body is procedural geometry (capsule, head, eyes) that slides
+  rather than walks. It reads clearly and shows facing and alignment, but there are no animation
+  states.
+- **The CC0 rigged creature was not fetched.** Agreed at planning time as the one third-party
+  asset; the session's remaining budget went to the mind and the inspector instead.
+  `ATTRIBUTIONS.md` and the licence gate are ready for it. The procedural fallback named in the
+  plan is what is in the build.
+- No audio pass.
+
 ## 7. Known issues
 
 - **The active 3D physics backend cannot be confirmed from headless output.** Godot 4.6 exposes
@@ -319,13 +348,18 @@ regardless.
 
 ---
 
-**NEXT ACTION:** Begin Phase 5 — creature body and Mind Inspector, so the learning proven in
-Phase 4 becomes visible in play. Build `src/creature/body/creature.gd` (CharacterBody3D,
-locomotion, animation states) driving `CreatureMind` on a 5 Hz jittered tick; wire pet/slap input
-in `src/hand/hand.gd` to `mind.apply_player_feedback(+1/-1)`; add the three leashes; then
-`src/ui/mind_inspector.gd` showing live desire bars, the chosen `(action, object)` with its score,
-the decision path from `opinions.decision_path()`, and `mind.recent_feedback()` as a scrolling
-log. Everything it needs is already exposed — `CreatureMind.last_options()`, `last_choice()`,
-`recent_feedback()`. Acceptance: manual run demonstrating DoD items 5 and 6.
+**NEXT ACTION:** Phase 2, the village sim — it is the largest remaining gap and everything else
+(miracles need worshippers, conversion needs a second village) depends on it. Build
+`src/village/villager.gd` as a `WorldObject` of type `villager` with needs `food/sleep/worship/
+procreate` chosen by utility scoring, `src/village/store.gd` with **reservations** so concurrent
+claims cannot drive levels negative, and jobs farmer/forester/builder/breeder/priest. Register
+every villager with the existing `object_registry.gd` so the creature perceives them for free —
+that seam already works and `main.gd` currently fakes villagers as inert spheres
+(`_scatter_food`), which should be replaced. Spread decision ticks round-robin across frames.
+Acceptance: headless 20-minute sim-time run, population 8 → ≥12, no starvation deadlock, no NaN,
+store never negative.
 
-After that, Phase 2 (village), then Phase 3 (miracles), then Phase 6.
+Then Phase 3 (miracles/gestures), then finish Phase 5 (animation FSM, CC0 creature, audio), then
+Phase 6. A save/load layer for the *whole* game state is also outstanding — only the creature's
+mind serialises today (`CreatureMind.to_dict()`), which covers DoD item 7's hard part but not the
+world around it.

@@ -187,6 +187,24 @@ func test_feedback_outside_the_window_is_ignored() -> void:
 		"a slap long after the fact should teach nothing")
 
 
+func test_creature_is_not_frightened_of_itself() -> void:
+	# Regression. The creature has an entry in the world registry like anything
+	# else, so it found itself at distance zero, read its own type as a nearby
+	# threat, and sat at Fear 0.73 for its whole life. Caught by looking at the
+	# Mind Inspector, not by any assertion — hence this one.
+	_populate()
+	var own_entry: WorldObject = _harness.add(&"creature", Vector3.ZERO)
+	_harness.mind.self_object_id = own_entry.id
+
+	var inputs: PackedFloat32Array = _harness.mind.situation()
+	gut.p("threat proximity with only itself nearby: %.3f" % inputs[Desires.IN_THREAT_NEAR])
+	assert_eq(inputs[Desires.IN_THREAT_NEAR], 0.0,
+		"a creature alone should sense no threat")
+
+	for object: WorldObject in _harness.mind.perceive():
+		assert_ne(object.id, own_entry.id, "the creature should not perceive itself")
+
+
 func test_demonstration_weighs_more_than_imitation() -> void:
 	_populate()
 	var food: WorldObject = _harness.world.query_near(Vector3.ZERO, 100.0, [FOOD_PILE])[0]
