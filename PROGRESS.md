@@ -63,10 +63,11 @@ presentation layer runs short, which is what "never cut items 5, 6, 7" actually 
 | 0 | Scaffold | `tools/ci.sh` exits 0 on a clean clone | ✅ done |
 | 1 | World & Hand | thrown body lands within tolerance of ballistic prediction | ✅ done |
 | 4 | **Creature Mind** | perceptron converges; ID3 learns pattern; **creature unlearns punished behaviour**; learned state round-trips | ✅ done |
-| 2 | Village Sim | 20-min headless sim, pop 8 → ≥12, no deadlock/NaN, store never negative | ⬜ not started |
-| 3 | Miracles & Gestures | recogniser ≥90% over ≥20 synthetic strokes per template | ⬜ not started |
-| 5 | Body & Inspector | manual run demonstrating DoD items 5 and 6 | 🟡 partial — no animation FSM, no CC0 asset, no audio |
-| 6 | Alignment & Polish | DoD 1–8 demonstrable; ≥60fps @ 200 villagers | ⬜ not started |
+| 2 | Village Sim | 20-min headless sim, pop 8 → ≥12, no deadlock/NaN, store never negative | ✅ done — **8 → 24** |
+| 3 | Miracles & Gestures | recogniser ≥90% over ≥20 synthetic strokes per template | ✅ done — **100.0%** |
+| 5 | Body & Inspector | manual run demonstrating DoD items 5 and 6 | ✅ done — animation FSM wired; no CC0 asset, no audio |
+| 6 | Alignment & Polish | DoD 1–8 demonstrable; ≥60fps @ 200 villagers | 🟡 mostly — perf target unmeasured |
+| — | Web build | playable in a browser on GitHub Pages | ✅ **https://jfhutchi.github.io/Numen/** |
 
 ## 4. Phase detail
 
@@ -317,6 +318,87 @@ inspector being a required deliverable rather than a nicety.
   plan is what is in the build.
 - No audio pass.
 
+### Phases 2, 3, 6 and the rest of 5 — ✅ done (2026-07-29)
+
+Authored as five isolated modules in parallel, each adversarially reviewed, then
+integrated by hand. **29 review findings applied.** Full suite: `Scripts 15 | Tests 155 |
+Passing 155 | Asserts 942`.
+
+**Phase 2 — Village.** Real 20-minute headless run:
+
+```
+   t(s) |  pop | food  | wood  | houses | fields | desire
+      0 |    8 |  40.0 |  20.0 |      2 |      2 | work
+    120 |   13 |  74.0 |  50.0 |      4 |      2 | work
+    240 |   24 | 174.0 |  96.0 |      6 |      4 | work
+    ...
+   1200 |   24 | 3578.0 | 1536.0 |      6 |      4 | work
+population 8 -> 24 (16 births, 0 deaths), 537 acts of worship
+store: food 3578.0, wood 1536.0. Low water: food 14.0, wood 2.0
+desires observed over the run: [work, food, sleep, procreate]
+famine recovery: first food banked at t=8.6s, after 400s pop 24 (0 dead)
+one decision tick over 8 villagers: 2 decided   <- tick budget honoured
+```
+
+**Phase 3 — Gestures.** `$P` recogniser, 100 synthetic strokes, seed 20260729:
+
+```
+template  | trials | correct | accuracy | mean score
+spiral    |     20 |      20 |   100.0% |      0.821
+chevron   |     20 |      20 |   100.0% |      0.889
+wave      |     20 |      20 |   100.0% |      0.865
+circle    |     20 |      20 |   100.0% |      0.937
+bolt      |     20 |      20 |   100.0% |      0.898
+overall: 100/100 correct = 100.0% (rotation +/-30 deg, jitter 2%)
+```
+
+**Six bugs green tests did not catch.** Worth reading before trusting a passing suite:
+
+1. **The whole gesture→miracle path was dead.** Every miracle's `gesture_template` silently
+   defaulted to its own id (`food`, `wood`) instead of the recogniser's names (`spiral`,
+   `chevron`), because the constructor was called with 7 of its 8 arguments. Every miracle test
+   passed regardless, because they all looked up by miracle id.
+2. **Miracle effects did nothing to a real village.** They reached through `WorldObject.node`,
+   which the village never sets — it registers with `add(type, at)` and no node. Heal, water and
+   lightning were no-ops in game while passing against node-carrying test stubs.
+3. **The village desire indicator lied.** It ranked needs by `weighted_level` while villagers act
+   on `weighted_level × feasibility`, so it locked onto an unsatisfiable `procreate` the moment
+   population capped. The acceptance output showed it frozen from t=240 to t=1200 and no
+   assertion cared.
+4. **Grabbing a villager froze it forever.** `_sync_record()` surrendered position control the
+   first time `WorldObject.node` was set, and nothing ever clears that field — so a villager
+   picked up by the divine hand stood still until it starved.
+5. **Prayer and influence would have vanished from every save.** Both expose `to_dict`/`from_dict`
+   but no `save_id()`, so `SaveManager.register()` refused them. Only found by running the game
+   and reading the error it printed.
+6. **Every building was half-buried.** Meshes are centred on their origin, so placing one at
+   ground height sank half of it — houses read as flat slabs in the hillside. Only a screenshot
+   found it.
+
+**Phase 5 finish.** `CreatureAnimator` wired into the body: locomotion blending, one-shot states
+that play to completion, priority so `hurt` interrupts but idle does not. Pet plays `celebrate`,
+slap plays `hurt`, and mind actions map through `CreatureActionStates.for_action()`.
+
+**Phase 6.** Whole-game save/load (`F5`/`F9`) over creature mind, prayer, influence, conversion,
+alignment and a registry snapshot; alignment tracker driving HUD descriptor; two villages with
+belief-based conversion, the second settled away via a new `search_origin` hook.
+
+### Web build — ✅ live at https://jfhutchi.github.io/Numen/
+
+Built and deployed by `.github/workflows/pages.yml` on every push to `main`, with the test suite
+gating the deploy. Verified live: `index.wasm` serves as `application/wasm`, and the deployed page
+boots with **zero console errors** under `WebGL 2.0 - Compatibility, single-threaded`.
+
+Three things made it possible, each of which is normally what kills a Godot web deploy:
+
+- **Godot 4 refuses to export to web from a C#-capable editor**, even for a pure-GDScript project
+  ("Exporting to Web is currently not supported in Godot 4 when using C#/.NET"). Our local editor
+  is the mono build, so CI installs the **standard** 4.6.3 build instead.
+- **GitHub Pages cannot set COOP/COEP headers**, which threaded WASM requires. Exported with
+  **Thread Support off** (`web_nothreads_release`), so no cross-origin isolation is needed.
+- **Forward+ is unavailable on web** (WebGL 2.0 only), so `project.godot` carries a
+  `renderer/rendering_method.web="gl_compatibility"` override.
+
 ## 7. Known issues
 
 - **The active 3D physics backend cannot be confirmed from headless output.** Godot 4.6 exposes
@@ -345,21 +427,36 @@ inspector being a required deliverable rather than a nicety.
   outside a booted game.
 - Thrown props stay as `RigidBody3D` after they come to rest rather than being reabsorbed into
   the MultiMesh. Harmless at this scale; revisit if a player can litter the island with hundreds.
+- **`heal` and `water` are report-only.** They identify the right targets and spend prayer power,
+  but change nothing, because villagers have no health and fields have no moisture model. Two of
+  the five miracles are therefore decorative. Flagged honestly by the module author rather than
+  faked; see NEXT ACTION item 1.
+- **The ≥60 fps at 200 villagers target is unmeasured.** The village caps at 24 by default and no
+  profiler run has been done, so that DoD line is not evidenced either way.
+- The village centre doubles as storehouse and temple. A separate perceivable temple needs a
+  `temple` row in `ObjectAttributes.TRUTH`; deferred deliberately and documented in
+  `src/village/village.gd`.
+- Learning is still one-shot: a single ID3 experience makes a pure leaf at ±1.0, so one slap forms
+  a full opinion. Passes the acceptance test, reads abruptly in play. See
+  `docs/design/creature_mind.md` §9.
+- The web build cannot be screenshotted from this harness (a hidden browser pane does not
+  composite frames or fire `requestAnimationFrame`), so it is verified by console output and
+  asset MIME types rather than by eye.
 
 ---
 
-**NEXT ACTION:** Phase 2, the village sim — it is the largest remaining gap and everything else
-(miracles need worshippers, conversion needs a second village) depends on it. Build
-`src/village/villager.gd` as a `WorldObject` of type `villager` with needs `food/sleep/worship/
-procreate` chosen by utility scoring, `src/village/store.gd` with **reservations** so concurrent
-claims cannot drive levels negative, and jobs farmer/forester/builder/breeder/priest. Register
-every villager with the existing `object_registry.gd` so the creature perceives them for free —
-that seam already works and `main.gd` currently fakes villagers as inert spheres
-(`_scatter_food`), which should be replaced. Spread decision ticks round-robin across frames.
-Acceptance: headless 20-minute sim-time run, population 8 → ≥12, no starvation deadlock, no NaN,
-store never negative.
+**NEXT ACTION:** Close the three honest gaps below, in this order.
 
-Then Phase 3 (miracles/gestures), then finish Phase 5 (animation FSM, CC0 creature, audio), then
-Phase 6. A save/load layer for the *whole* game state is also outstanding — only the creature's
-mind serialises today (`CreatureMind.to_dict()`), which covers DoD item 7's hard part but not the
-world around it.
+1. **Make `heal` and `water` do something.** Both currently only *report* which objects they
+   reached, because there is nothing to change: `Villager` has no health, only `alive`; and
+   `wheat_field` has no moisture or per-field yield — `harvest_food` is a flat constant. Add
+   `health: float` to `Villager` and a per-field `moisture` that scales harvest, then make the two
+   effects act on them. The `ponytail:` comments in `src/miracles/miracle_effects.gd` name exactly
+   what is missing. Until then two of the five miracles are decorative.
+2. **Measure the performance target.** DoD says ≥60 fps with 200 villagers; nothing has measured
+   it. Raise `max_population`, run the profiler, and record the real figure rather than assuming.
+   Villager decision ticks are already budgeted round-robin, so the likely cost is draw calls —
+   villagers are one `MeshInstance3D` each and should become a MultiMesh.
+3. **Audio, and the CC0 rigged creature.** Neither exists. `ATTRIBUTIONS.md` and the licence gate
+   are ready for the asset; the creature is procedural geometry that now animates but has no
+   skeleton.

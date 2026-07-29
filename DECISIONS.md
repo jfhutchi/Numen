@@ -170,3 +170,72 @@ confirmed would be a false claim in the project's own record.
 **Consequences.** One more guarded setting. An honest gap stays open in `PROGRESS.md` until
 someone eyeballs Project Settings. The Phase 1 ballistic test exercises whichever backend is
 live and asserts correct behaviour regardless, so the gap does not block progress.
+
+**Update (2026-07-29):** resolved. The game's own boot banner, printed at runtime from
+`ProjectSettings`, reads `3D physics: Jolt Physics` in the desktop run and in the deployed web
+build. The pin is in force.
+
+---
+
+## ADR-008 — Ship a browser build to GitHub Pages, built by CI with the *standard* editor
+
+**Date:** 2026-07-29
+
+**Context.** The game should be playable from a link. GitHub Pages is free, the repo is public,
+and Godot 4 has a Web export — but three things normally make this fail.
+
+**Decision.** Export to Web and deploy from `.github/workflows/pages.yml` on every push to `main`,
+with the test suite gating the deploy. Three specific choices make it work:
+
+1. **CI installs the standard (non-.NET) Godot 4.6.3**, not the local mono build. Godot 4 refuses
+   to export to web from a C#-capable editor *even when the project contains no C#* — verified by
+   trying it: `Exporting to Web is currently not supported in Godot 4 when using C#/.NET. ... If
+   this project does not use C#, use a non-C# editor build.` The project has no `.csproj`, so the
+   standard editor is simply the correct tool.
+2. **Thread Support off** (`web_nothreads_release`). Threaded WASM needs `SharedArrayBuffer`, which
+   needs COOP/COEP response headers, which **GitHub Pages cannot set**. Single-threaded is the
+   only thing hostable there, and has been Godot's default since 4.3 for exactly this reason.
+3. **`renderer/rendering_method.web="gl_compatibility"`.** Godot 4 targets WebGL 2.0 only;
+   Forward+ and Mobile do not exist on the web platform.
+
+**Rejected.** Committing the build to `docs/` and serving from the branch — 37 MB of WASM that
+changes on every gameplay edit, permanently in git history, for an artefact that is fully
+reproducible. A `coi-serviceworker` shim to fake cross-origin isolation and keep threads — extra
+moving parts and a service worker to debug, to buy multithreading a single-island god-game does
+not need. Reusing the mono editor with a custom template path — fighting an explicit engine
+refusal to save a 79 MB download.
+
+**Consequences.** The browser build looks slightly different from desktop: Compatibility has
+cheaper shadows and fog than Forward+. Single-threaded WASM will not reach the "200 villagers at
+60 fps" target — the web build is a playable demo, not the performance benchmark. CI now depends
+on GitHub's release CDN for the editor and templates, cached by version key.
+
+---
+
+## ADR-009 — Author independent modules in parallel, integrate by hand, review adversarially
+
+**Date:** 2026-07-29
+
+**Context.** Phases 2, 3, 6 and the rest of 5 were four largely independent bodies of work. The
+original brief permits parallelism where work is genuinely independent, and explicitly forbids it
+for the creature mind, which needs one coherent author.
+
+**Decision.** Five agents authored one module each — village, gestures, miracles, animation,
+persistence — under three hard rules: **new files only in their own directory**, **never touch
+`main.gd` or `project.godot`**, and **never run Godot**. Each module was then handed to a separate
+adversarial reviewer hunting compile errors, Godot-4.6 API misuse, determinism breaks and weakened
+tests. Integration into `main.gd` was done by one hand afterwards, and every claim verified by
+running the suite and the game.
+
+**Rejected.** Letting agents run Godot themselves — concurrent `--headless --import` corrupts the
+shared `.godot` cache. Git worktree isolation per agent — solves the cache race but adds a merge
+of five branches over a Godot project for no gain, since the file sets barely overlap. Trusting
+the authors' own reports — they could not execute their code, so their reports are hypotheses.
+
+**Consequences.** It worked well: all five modules compiled first time and 146 tests passed before
+any fix. But the reviewers earned their keep more than the authors did — they found **29 findings
+including two blockers that a fully green suite completely hid** (a dead gesture→miracle binding,
+and miracle effects that no-oped against a real village). And running the game found three more
+that neither authors nor reviewers caught. The lesson is recorded in `PROGRESS.md`: **a green
+suite proves the tests pass, not that the feature works.** Parallel authoring needs a reviewer
+*and* an integrator who actually executes the thing.

@@ -10,11 +10,39 @@ Everything else in the game exists to make that creature matter.
 > learned opinion — as prior art for **mechanics only**. No assets, names, audio, or files from
 > any other game are used, referenced, or shipped here.
 
+## Play it in your browser
+
+**https://jfhutchi.github.io/Numen/**
+
+Built and deployed from `main` by CI, with the test suite gating the deploy. It is a ~37 MB
+download on first load. The browser build runs on WebGL 2.0 (Compatibility) and single-threaded
+WASM, so it looks a little plainer and runs slower than the desktop build — see
+[ADR-008](DECISIONS.md).
+
+## Controls
+
+| Input | Does |
+| --- | --- |
+| Left mouse | Grab and throw — trees, rocks, food, villagers |
+| Right mouse drag | Orbit the camera |
+| Wheel / Arrow keys | Zoom / pan |
+| **Middle mouse drag** | Draw a miracle gesture — spiral food, chevron wood, wave water, circle heal, bolt lightning |
+| **P** / **L** | Pet (reward) / slap (punish) the creature |
+| **1–4** | Leash: none / learning / compassion / aggression |
+| **F** / **V** | Snap the camera to the creature / the village |
+| **Tab** | Toggle the Mind Inspector |
+| **F5** / **F9** | Save / load |
+
+To watch the creature learn: find it with **F**, open the inspector with **Tab**, and watch the
+`opinion` figure on whatever it chose. Slap it within ~6 seconds of an action and that action's
+opinion goes negative; the "Why" panel shows the exact attribute it split on.
+
 ## Status
 
-Early. See [PROGRESS.md](PROGRESS.md) for the phase log, real test output, and the current
+See [PROGRESS.md](PROGRESS.md) for the phase log, real test output, known gaps, and the current
 **NEXT ACTION**. Architectural choices and their rejected alternatives live in
-[DECISIONS.md](DECISIONS.md).
+[DECISIONS.md](DECISIONS.md); the AI is specified in
+[docs/design/creature_mind.md](docs/design/creature_mind.md).
 
 ## Requirements
 
