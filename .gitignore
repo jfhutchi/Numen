@@ -11,8 +11,13 @@ bin/
 obj/
 *.csproj.user
 
-# Local-only export config (contains machine paths)
-export_presets.cfg
+# export_presets.cfg IS committed: CI needs it to build the web release.
+# It must therefore stay free of machine-specific paths — CI installs export
+# templates to the standard location and relies on the default lookup.
+
+# Exported builds are produced by CI, never committed.
+/build/
+/web-build/
 
 # Test/CI scratch
 /tests/_out/

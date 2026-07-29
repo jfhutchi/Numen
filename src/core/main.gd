@@ -161,6 +161,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_4:
 			creature.set_leash(creature.LEASH_AGGRESSION)
 			_hud_label.text = "leash: aggression"
+		KEY_F:
+			# The creature spawns somewhere random on a 160 m island and there is
+			# no follow-cam, so without this the first thing a player does is
+			# hunt for it. Snapping the focus is the difference between the
+			# teaching loop being usable and being a scavenger hunt.
+			camera_rig.set_focus(creature.global_position)
+			_hud_label.text = "camera on the creature"
 		KEY_TAB:
 			inspector.visible = not inspector.visible
 
@@ -223,7 +230,8 @@ static func boot_report() -> PackedStringArray:
 		"3D physics: %s" % physics_engine_name(),
 		"",
 		"Left mouse: grab / throw    Right mouse: orbit    Wheel: zoom    Arrows: pan",
-		"P: pet    L: slap    1-4: leash (none/learning/compassion/aggression)    Tab: inspector",
+		"P: pet    L: slap    1-4: leash (none/learning/compassion/aggression)",
+		"F: find the creature    Tab: inspector",
 	])
 
 

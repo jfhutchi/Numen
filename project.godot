@@ -26,6 +26,11 @@ enabled=PackedStringArray("res://addons/gut/plugin.cfg")
 [rendering]
 
 renderer/rendering_method="forward_plus"
+; Godot 4 can only target WebGL 2.0 on the web; Forward+ and Mobile are not
+; available there, so the browser build falls back to Compatibility. Everything
+; NUMEN draws is StandardMaterial3D, sky and fog, all of which Compatibility
+; supports — the visual difference is minor.
+renderer/rendering_method.web="gl_compatibility"
 
 [physics]
 
