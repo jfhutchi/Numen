@@ -1,0 +1,106 @@
+name: Deploy web build to GitHub Pages
+
+# The browser build is produced here rather than committed: it is ~37 MB of
+# WASM that changes on every gameplay edit, and a binary that large in git
+# history is a permanent tax for a artefact that is fully reproducible.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege: read the repo, publish Pages, and mint the OIDC token
+# deploy-pages needs. Nothing else.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time. Cancelling an in-flight run rather than queueing avoids
+# a slow build overwriting a newer one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  # Must be the standard build, NOT the .NET/mono one: Godot 4 refuses to export
+  # to web from a C#-capable editor even when the project is pure GDScript
+  # ("Exporting to Web is currently not supported in Godot 4 when using
+  # C#/.NET"). The project has no .csproj, so the standard editor is correct.
+  GODOT_VERSION: 4.6.3-stable
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot editor and export templates
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}
+
+      - name: Install Godot and export templates
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}"
+          mkdir -p ~/godot-bin
+
+          curl -fsSL -o godot.zip "${base}/Godot_v${GODOT_VERSION}_linux.x86_64.zip"
+          unzip -q godot.zip -d ~/godot-bin
+          mv ~/godot-bin/Godot_v${GODOT_VERSION}_linux.x86_64 ~/godot-bin/godot
+          chmod +x ~/godot-bin/godot
+
+          curl -fsSL -o templates.tpz "${base}/Godot_v${GODOT_VERSION}_export_templates.tpz"
+          # The .tpz is a zip containing a single `templates/` directory; Godot
+          # expects its contents under a folder named for the exact version.
+          unzip -q templates.tpz -d /tmp/tpl
+          mkdir -p ~/.local/share/godot/export_templates
+          mv /tmp/tpl/templates "$HOME/.local/share/godot/export_templates/${GODOT_VERSION//-/.}"
+
+      - name: Verify toolchain
+        run: |
+          set -euo pipefail
+          ~/godot-bin/godot --version
+          ls "$HOME/.local/share/godot/export_templates/${GODOT_VERSION//-/.}/web_nothreads_release.zip"
+
+      - name: Import project
+        # Must be --import, not --quit: --quit imports resources but does not
+        # register script class_names, and the export then fails to resolve them.
+        run: ~/godot-bin/godot --headless --path . --import
+
+      - name: Run the test suite
+        # The gate that guards the deploy. A red suite must not reach Pages.
+        run: |
+          set -euo pipefail
+          GODOT_BIN="$HOME/godot-bin/godot" bash tools/ci.sh
+
+      - name: Export web build
+        run: |
+          set -euo pipefail
+          mkdir -p build/web
+          ~/godot-bin/godot --headless --path . --export-release "Web" build/web/index.html
+          test -s build/web/index.wasm
+          # Pages runs Jekyll by default, which silently drops files beginning
+          # with an underscore. Godot's output has none today, but this costs
+          # nothing and the failure mode is a blank page with a 404 in console.
+          touch build/web/.nojekyll
+          ls -la build/web
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
