@@ -62,7 +62,7 @@ presentation layer runs short, which is what "never cut items 5, 6, 7" actually 
 | --- | --- | --- | --- |
 | 0 | Scaffold | `tools/ci.sh` exits 0 on a clean clone | ✅ done |
 | 1 | World & Hand | thrown body lands within tolerance of ballistic prediction | ✅ done |
-| 4 | **Creature Mind** | perceptron converges; ID3 learns pattern; **creature unlearns punished behaviour**; learned state round-trips | ⬜ not started |
+| 4 | **Creature Mind** | perceptron converges; ID3 learns pattern; **creature unlearns punished behaviour**; learned state round-trips | ✅ done |
 | 2 | Village Sim | 20-min headless sim, pop 8 → ≥12, no deadlock/NaN, store never negative | ⬜ not started |
 | 3 | Miracles & Gestures | recogniser ≥90% over ≥20 synthetic strokes per template | ⬜ not started |
 | 5 | Body & Inspector | manual run demonstrating DoD items 5 and 6 | ⬜ not started |
@@ -233,6 +233,61 @@ outcrop, scattered trees and rocks, water, HUD. Boot log reports `Vulkan 1.4.341
    trimmed mean that discards the single fastest sample — a 300 m/s spike now leaves the estimate
    at exactly `(10, 0, 0)`.
 
+### Phase 4 — Creature Mind — ✅ done (2026-07-29) — **the keystone**
+
+Full §5 spec implemented in `src/creature/mind/`, documented in
+[docs/design/creature_mind.md](docs/design/creature_mind.md), and proven headless through
+`tests/behavioral/sim_harness.gd`.
+
+**Keystone acceptance test — real trial-by-trial output:**
+
+```
+baseline  P(eat villager)=0.1250  P(eat food_pile)=0.1250
+trial | P(eat villager) | P(eat food_pile) | opinion(villager) | opinion(food)
+    1 |          0.0016 |           0.5607 |            -1.000 |        0.850
+    2 |          0.0016 |           0.5607 |            -1.000 |        0.850
+    ...  (trials 3-14 identical)
+   15 |          0.0016 |           0.5607 |            -1.000 |        0.850
+final     P(eat villager)=0.0016 (1.2% of baseline)
+final     P(eat food_pile)=0.5607 (448.5% of baseline)
+
+* test_learning_generalises_to_a_villager_it_has_never_met
+    opinion of eating a never-before-seen villager: -1.000
+* test_learned_state_roundtrips
+    first 6 original: ["eat:food_pile", "eat:food_pile", "eat:food_pile", "give_to_village:villager", ...]
+    first 6 restored: ["eat:food_pile", "eat:food_pile", "eat:food_pile", "give_to_village:villager", ...]
+6/6 passed.
+```
+
+Punishment collapsed villager-eating to **1.2% of baseline** (target: under 10%) while food-eating
+*rose* to 448% — the aversion stayed specific. Learned opinions separate cleanly at −1.000 vs
++0.850, generalise to a villager never encountered, and reproduce 100 seeded ticks exactly across
+a save/load cycle.
+
+Primitives: `converged after 2568 epochs (worst error 0.0500)`; ID3 held-out `high=1.000
+low=-1.000`. Full suite: `Scripts 8 | Tests 54 | Passing Tests 54 | Asserts 243 | Time 9.419s`.
+
+**Four bugs, each of which the naive version would have shipped:**
+
+1. *The creature forgot at trial 13.* Punishment pushed Hunger out of the top-K desires, so `eat`
+   began being evaluated under Curiosity — which had a blank slate, because trees are per
+   `(desire, action)`. Opinions snapped to 0.000 and the collapse reversed. Fixed with a
+   cross-desire fallback: knowledge of what a thing is *to do to* survives the motive changing.
+2. *Punishment was extinguishing the drive itself.* Reinforcing desires at 0.5 per event meant
+   fifteen slaps stopped the creature being hungry at all. Desires are drives, not choices —
+   nudge reduced to 0.15.
+3. *A well-taught creature grew less decisive over time.* Scores scale with desire intensity, and
+   punishment also nudges desires down, so the whole spread shrank: opinion stayed pinned at
+   −1.0 while P crept back from 0.0088 toward uniform. Fixed by normalising scores before the
+   softmax, making temperature scale-invariant.
+4. *Save/load diverged after one decision.* RNG seed and state are 64-bit; JSON numbers parse back
+   as doubles and silently drop the low bits. Stored as strings now.
+
+Also: softmax temperature had to be recalibrated from 0.85 to 0.30. With opinions in `[-1,1]` the
+creature was nearly indifferent to everything it knew. Exploration in a young creature does not
+come from temperature anyway — a blank mind predicts 0 for everything, so the softmax is uniform
+regardless.
+
 ## 7. Known issues
 
 - **The active 3D physics backend cannot be confirmed from headless output.** Godot 4.6 exposes
@@ -264,10 +319,13 @@ outcrop, scattered trees and rocks, water, HUD. Boot log reports `Vulkan 1.4.341
 
 ---
 
-**NEXT ACTION:** Begin Phase 4 — the creature mind, built third per ADR-003. Write
-`tests/behavioral/sim_harness.gd` **first** so learning can be iterated headless, then
-`src/creature/mind/`: `perceived_object.gd`, `world_view.gd` (`MockWorldView` +
-`SceneWorldView` over the registry at `src/world/object_registry.gd`), `belief_table.gd`
-(per-instance seeded from per-type priors, ADR-005), `perceptron.gd`, `desires.gd`, `id3.gd`
-(binned attributes, ADR-006), `opinion_store.gd`, `mind.gd`, `feedback.gd`, `mind_tunables.gd`.
-Keystone acceptance test: `test_creature_unlearns_punished_behavior`.
+**NEXT ACTION:** Begin Phase 5 — creature body and Mind Inspector, so the learning proven in
+Phase 4 becomes visible in play. Build `src/creature/body/creature.gd` (CharacterBody3D,
+locomotion, animation states) driving `CreatureMind` on a 5 Hz jittered tick; wire pet/slap input
+in `src/hand/hand.gd` to `mind.apply_player_feedback(+1/-1)`; add the three leashes; then
+`src/ui/mind_inspector.gd` showing live desire bars, the chosen `(action, object)` with its score,
+the decision path from `opinions.decision_path()`, and `mind.recent_feedback()` as a scrolling
+log. Everything it needs is already exposed — `CreatureMind.last_options()`, `last_choice()`,
+`recent_feedback()`. Acceptance: manual run demonstrating DoD items 5 and 6.
+
+After that, Phase 2 (village), then Phase 3 (miracles), then Phase 6.

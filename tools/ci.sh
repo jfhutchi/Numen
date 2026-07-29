@@ -77,6 +77,14 @@ if ! grep -qE 'Totals|All tests passed|passing' "$test_log"; then
 	echo "FAIL: gut produced no recognisable summary - treating as failure" >&2
 	exit 1
 fi
+# A test file that fails to parse is *skipped*, not failed: GUT logs the error,
+# runs the rest, and exits 0. That is worse than a red suite, because the gate
+# stays green while whole files silently stop running.
+if grep -qE 'Parse Error|Failed to load script|Compile Error' "$test_log"; then
+	echo "FAIL: a script failed to parse or compile - it was silently skipped" >&2
+	grep -E 'Parse Error|Failed to load script|Compile Error' "$test_log" | head -5 >&2
+	exit 1
+fi
 
 echo
 echo "== CI OK =="
