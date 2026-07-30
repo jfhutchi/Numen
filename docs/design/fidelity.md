@@ -16,7 +16,7 @@ time. Ordered by how much each mechanic defined the original.
 
 | Mechanic | NUMEN |
 | --- | --- |
-| A creature that learns from observation and from reward/punishment | The whole of `src/creature/mind/`. Punishment collapses `P(eat villager)` to 1.2% of baseline while food-eating rises, generalises to unseen villagers, and survives save/load |
+| A creature that learns from observation and from reward/punishment | The whole of `src/creature/mind/`. Punishment collapses `P(eat villager)` to 1.5% of baseline while food-eating rises, generalises to unseen villagers, and survives save/load |
 | The hand as the only cursor — grab, drag, throw, drop | `src/hand/hand.gd`, with a trimmed-mean throw estimator |
 | Gesture-drawn miracles | `$P` recogniser from the published paper, 100% on 100 synthetic strokes |
 | Prayer power from worshippers, spent per cast | `src/miracles/prayer_power.gd` |
@@ -26,38 +26,31 @@ time. Ordered by how much each mechanic defined the original.
 | Leashes | Three, biasing desires without overriding learning |
 | Alignment changing the creature's appearance | EMA driving a material overlay on the wolf |
 | Converting a second village by belief | `src/village/conversion.gd` |
-| Two conscience voices arguing over your shoulder | Phase 8, in progress |
+| Two conscience voices arguing over your shoulder | `src/ui/conscience.gd` — 24 topics, alignment-weighted, rate-limited three ways |
+| Teaching by demonstration, as a real loop | `Creature.witness()` — perception-gated, filed under the owning desire, driven by the player's real acts. Was reachable only by accident |
+| Conviction accumulating rather than arriving at once | ID3 leaves shrunk by evidence: the keystone now ramps −0.250 to −0.976 over 15 punishments instead of snapping to −1.0 on the first |
 
 ## Missing, ranked by how much it mattered to the original
-
-1. **Creature teaching by demonstration, as a real loop.** The original's central pleasure was
-   leading the creature by the leash, doing a thing, and watching it copy you. NUMEN has
-   `learn_from_demonstration()` and the learning leash, but the only way to reach it is throwing
-   something while the creature happens to be watching. This is the largest gap between NUMEN and
-   the original, and it is a *wiring* gap, not a missing system.
-2. **Consequence.** Nothing threatens the player. No raids, no rival god, no failure state. Every
+1. **Consequence.** Nothing threatens the player. No raids, no rival god, no failure state. Every
    decision is therefore free, which is what makes the current build a sandbox rather than a game.
-3. **Creature combat.** Creature-vs-creature fights were the original's late game and its payoff
+2. **Creature combat.** Creature-vs-creature fights were the original's late game and its payoff
    for having taught one well. NUMEN's mind is headless-testable, so pitting two *learned* minds
    against each other is unusually cheap here — and a genuinely novel thing to be able to test.
-4. **Confidence in learning.** One ID3 experience currently makes a pure leaf at ±1.0, so a single
-   slap forms a complete opinion. The original's creature was *persuaded* over time. Weighting a
-   leaf by its sample count is the single biggest improvement available to how the creature feels.
-5. **Sacrifice and worship as player verbs.** Putting a villager on the altar for power was the
+3. **Sacrifice and worship as player verbs.** Putting a villager on the altar for power was the
    original's sharpest moral mechanic: the cheapest prayer came at the highest cost. NUMEN has a
    village centre that counts worship but nothing the player *does* there.
-6. **Picking up and moving buildings.** Rearranging a village by hand. The hand already promotes
+4. **Picking up and moving buildings.** Rearranging a village by hand. The hand already promotes
    scenery to physics bodies; buildings are registry objects with meshes, so the machinery exists.
-7. **Creature can be taught village work.** Watering fields, carrying food to the store. `water_field`
+5. **Creature can be taught village work.** Watering fields, carrying food to the store. `water_field`
    and `give_to_village` are already in the action set and reachable, but nothing rewards them.
-8. **The world reflecting alignment.** The original's landscape and architecture shifted with the
+6. **The world reflecting alignment.** The original's landscape and architecture shifted with the
    player's morality. NUMEN tints the creature only.
-9. **Miracle dispensers at worship sites.** Power localised to places rather than a global pool.
-10. **Creature growth with age.** Age already decays learning rate and softmax temperature; nothing
-    shows it. The creature never visibly grows up.
-11. **Music that follows alignment.** The audio layer exists and is synthesised; nothing is wired.
-12. **Multiple islands.** The island generator is seeded and parameterised, so mostly camera and
-    save-state work.
+7. **Miracle dispensers at worship sites.** Power localised to places rather than a global pool.
+8. **Creature growth with age.** Age already decays learning rate and softmax temperature; nothing
+   shows it. The creature never visibly grows up.
+9. **Music that follows alignment.** The audio layer exists and is synthesised; nothing is wired.
+10. **Multiple islands.** The island generator is seeded and parameterised, so mostly camera and
+   save-state work.
 
 ## Deliberate divergences
 
@@ -72,11 +65,13 @@ time. Ordered by how much each mechanic defined the original.
 
 ## How the remaining phases map onto this
 
-- **Phase 8** — the conscience voices, plus making the existing systems legible at all. Items 11
-  partially.
-- **Phase 9** — consequence and combat. Items 2, 3.
-- **Phase 10** — depth in the creature. Items 1, 4, 7, 10.
-- **Later** — items 5, 6, 8, 9, 12.
+- **Phase 8** — done. The conscience voices, an action-verified tutorial, a gesture guide, a desire
+  indicator, and the audio layer finally wired.
+- **Phase 10** — done ahead of Phase 9, because teaching by demonstration was the biggest gap and a
+  wiring one. Confidence-weighted learning landed with it.
+- **Phase 9** — next: consequence and combat. Now the top of the list.
+- **Later** — sacrifice at the altar, movable buildings, the world reflecting alignment, localised
+  miracle dispensers, creature growth, alignment-driven music, multiple islands.
 
-Item 1 is the one to be honest about: it is the closest thing the original had to a thesis, and it
-is currently reachable only by accident. It should be pulled forward the moment Phase 8 lands.
+The remaining gap that matters most is **consequence**: nothing threatens the player, so no decision
+costs anything, and that is what still makes this a sandbox rather than a game.

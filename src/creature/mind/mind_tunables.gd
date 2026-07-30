@@ -45,6 +45,14 @@ extends Resource
 ## Feedback magnitude above which an experience counts as clearly good or bad
 ## rather than neutral.
 @export var feedback_class_threshold: float = 0.15
+## How much evidence a leaf needs before the creature trusts it fully.
+##
+## A leaf's value is scaled by `n / (n + this)`, so at 3 a single experience is
+## worth a quarter of its face value and ten are worth three quarters. Raising it
+## makes the creature harder to persuade and slower to change its mind; at 0 it
+## reverts to the old one-shot behaviour, where one slap produced an opinion of
+## exactly -1.0 and the creature read as a light switch rather than an animal.
+@export var leaf_confidence_samples: float = 3.0
 
 @export_group("Action selection")
 ## Decision ticks per second. Deliberately not every frame.

@@ -27,6 +27,16 @@ const GESTURE_BUTTON := MOUSE_BUTTON_MIDDLE
 ## rather than a stray click.
 const MIN_STROKE_LENGTH := 40.0
 
+## What the creature can learn to do by watching each miracle, in the mind's own
+## action vocabulary. Only miracles whose effect the creature could imitate are
+## listed: it can heal and water, but it cannot conjure food from nothing, so food
+## and wood teach it nothing and are deliberately absent.
+const MIRACLE_LESSONS: Dictionary = {
+	&"heal": &"heal",
+	&"water": &"water_field",
+	&"lightning": &"attack",
+}
+
 var island: Node3D
 var scatter: Node3D
 var camera_rig: Node3D
@@ -509,8 +519,33 @@ func _on_cast_performed(result: Dictionary) -> void:
 		# remark rather than silence.
 		conscience.observe(ConscienceLines.miracle_topic(miracle.id))
 		audio.play(AudioCues.for_miracle(miracle.id), result.get("at", Vector3.ZERO))
+		_teach_from_miracle(miracle, result)
 	tutorial.notify(Tutorial.EV_MIRACLE_CAST)
 	_hud_label.text = "cast %s" % result.get("id", "?")
+
+
+## Teaching by demonstration: the player heals a villager while the creature
+## watches, and the creature learns that healing villagers is a good thing to do.
+##
+## This is the closest thing the genre had to a thesis — you taught the creature by
+## doing, not by pressing buttons — and until now it was reachable only by
+## accident, from a single hardcoded call when a thrown object happened to be
+## released. The actions used are the mind's own vocabulary, so what the creature
+## learns here is the same knowledge it consults when choosing for itself.
+func _teach_from_miracle(miracle: Miracle, result: Dictionary) -> void:
+	var action: StringName = MIRACLE_LESSONS.get(miracle.id, &"")
+	if action == &"":
+		return
+	# Only what the miracle actually touched, so a heal cast over open ground
+	# teaches nothing rather than teaching something false.
+	for id: Variant in result.get("affected", []):
+		var object: WorldObject = _registry.get_object(int(id))
+		if object == null:
+			continue
+		# Signed by the miracle's own moral weight, so the creature draws the same
+		# conclusion the alignment tracker does and the two cannot disagree.
+		if creature.witness(action, object, signf(miracle.alignment_weight) * 0.7):
+			_hud_label.text = "the creature watched you %s" % action
 
 
 func _on_cast_refused(result: Dictionary) -> void:
@@ -548,7 +583,11 @@ func _on_released(object: WorldObject, throw_velocity: Vector3) -> void:
 	tutorial.notify(Tutorial.EV_OBJECT_THROWN)
 	# The creature watches what the player does with the world. Off the leash of
 	# learning this is only weak imitation.
-	creature.witness(&"throw", object, -0.2)
+	# Throwing a person is cruel; throwing a rock is just throwing a rock. The
+	# creature should learn the distinction rather than that throwing is bad.
+	var lesson: float = -0.6 if object.type == &"villager" else 0.15
+	if creature.witness(&"throw", object, lesson):
+		_hud_label.text = "%s — the creature was watching" % _hud_label.text
 
 
 func _on_creature_chose(option: CreatureMind.Option) -> void:

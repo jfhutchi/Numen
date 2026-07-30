@@ -120,7 +120,7 @@ static func _build(
 ) -> TreeNode:
 	var node := TreeNode.new()
 	node.sample_count = experiences.size()
-	node.value = _mean_feedback(experiences)
+	node.value = _shrunk_feedback(experiences, tunables)
 
 	if experiences.is_empty() or depth <= 0 or available.is_empty():
 		return node
@@ -208,6 +208,30 @@ static func _is_pure(experiences: Array, tunables: MindTunables) -> bool:
 		if class_of(experience.feedback, tunables.feedback_class_threshold) != first:
 			return false
 	return true
+
+
+## The leaf's mean feedback, pulled toward neutral by how little it rests on.
+##
+## Without this the creature learns in one shot: a single experience makes a pure
+## leaf, so one slap produced an opinion of exactly -1.0 and the creature was
+## instantly, permanently certain. It passed the keystone test and it read as a
+## light switch rather than an animal being persuaded.
+##
+## Shrinkage is `n / (n + k)`, the standard small-sample correction: with k = 3 one
+## experience carries a quarter of its face value, three carry half, ten carry
+## three quarters. Conviction now accumulates, which is what makes the creature
+## feel like it is making its mind up rather than being reprogrammed.
+##
+## Deliberately applied to the VALUE and not to the split choice: information gain
+## should still see the evidence as it is, or the tree would stop splitting on
+## genuine patterns that happen to be young.
+static func _shrunk_feedback(experiences: Array, tunables: MindTunables) -> float:
+	var mean: float = _mean_feedback(experiences)
+	var weight: float = _total_weight(experiences)
+	if weight <= 0.0:
+		return 0.0
+	var k: float = maxf(tunables.leaf_confidence_samples, 0.0)
+	return mean * (weight / (weight + k))
 
 
 static func _mean_feedback(experiences: Array) -> float:

@@ -123,6 +123,11 @@ const WOLF_CLIPS: Dictionary = {
 ## material, neither of which a skinned mesh has.
 @export var prefer_rigged_body: bool = true
 
+## How much of its perception range the creature learns by imitation within, as a
+## fraction. Off the learning leash it is only glancing over rather than being
+## shown, so it has to be closer for anything to stick.
+@export_range(0.0, 1.0) var imitation_reach_fraction: float = 0.45
+
 @export var move_speed: float = 7.0
 @export var turn_speed: float = 6.0
 ## How close it must be before it can act on something.
@@ -214,12 +219,42 @@ func slap() -> void:
 
 ## The player did something to an object in front of the creature. On the leash
 ## of learning this is a strong lesson; otherwise it is mere imitation.
-func witness(action: StringName, object: WorldObject, value: float) -> void:
-	var desire: StringName = &"Curiosity"
+## Returns true when the creature actually took the lesson.
+##
+## Three things were wrong with the first version, and all three made the central
+## mechanic of the genre reachable only by accident:
+##
+## 1. **It did not check whether the creature could see.** A rock thrown on the
+##    far side of the island taught it just as well as one thrown at its feet.
+##    Being led somewhere and shown a thing is the whole point of the learning
+##    leash; if distance does not matter, the leash does not either.
+## 2. **Every lesson was filed under Curiosity**, whatever it was about. The
+##    cross-desire fallback meant the knowledge was still reachable, but a lesson
+##    about healing belongs with Compassion, and putting it elsewhere makes the
+##    Mind Inspector's account of why the creature acted a fiction.
+## 3. **One caller, with a hardcoded action and value.** Nothing the player did on
+##    purpose taught the creature anything on purpose.
+func witness(action: StringName, object: WorldObject, value: float) -> bool:
+	if object == null:
+		return false
+	# It has to be able to see it. Off the leash the creature is only glancing over,
+	# so it has to be closer still for mere imitation to take.
+	var reach: float = mind.tunables.perception_radius
+	if leash != LEASH_LEARNING:
+		reach *= imitation_reach_fraction
+	if global_position.distance_to(object.current_position()) > reach:
+		return false
+
+	var desire: StringName = OpinionStore.desire_for_action(action)
 	if leash == LEASH_LEARNING:
 		mind.learn_from_demonstration(desire, action, object, value)
 	else:
 		mind.learn_from_imitation(desire, action, object, value)
+	if animator != null:
+		# It looks up when it notices. Cheap, and it tells the player the lesson
+		# landed without opening the Inspector.
+		animator.request_state(&"celebrate" if value > 0.0 else &"hurt")
+	return true
 
 
 func _physics_process(delta: float) -> void:

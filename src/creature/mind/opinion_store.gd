@@ -56,6 +56,20 @@ func _init(tunables: MindTunables = null) -> void:
 	_tunables = tunables if tunables != null else MindTunables.new()
 
 
+## Which desire owns an action, for crediting a lesson to the drive it belongs to.
+##
+## The inverse of ACTIONS_FOR_DESIRE. Several desires can consider the same action
+## — Hunger and Curiosity both eat — so the first owner wins and the choice is
+## documented rather than arbitrary: ACTIONS_FOR_DESIRE lists the physiological
+## drives before the exploratory ones, so eating is filed under Hunger, which is
+## where a player would look for it.
+static func desire_for_action(action: StringName) -> StringName:
+	for desire: StringName in ACTIONS_FOR_DESIRE:
+		if (ACTIONS_FOR_DESIRE[desire] as Array).has(action):
+			return desire
+	return &"Curiosity"
+
+
 static func key_for(desire: StringName, action: StringName) -> StringName:
 	return StringName("%s|%s" % [desire, action])
 

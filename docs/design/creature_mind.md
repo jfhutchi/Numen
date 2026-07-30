@@ -89,6 +89,19 @@ Two deliberate departures from textbook ID3:
 2. **Leaves store mean feedback, not a class label.** Splits are still chosen by information gain
    over discretised feedback classes, but the creature needs a *value* to rank options by; a bare
    good/bad label throws away the margin it needs to choose between two good options.
+3. **Leaf values are shrunk toward neutral by how little evidence they rest on**, by the standard
+   small-sample correction `n / (n + leaf_confidence_samples)`. At the default of 3, one experience
+   carries a quarter of its face value, three carry half, ten carry three quarters.
+
+   This is what makes the creature *persuadable* rather than programmable. Without it learning was
+   one-shot: a single experience made a pure leaf, so one slap produced an opinion of exactly
+   −1.0 and the creature was instantly and permanently certain. It passed the keystone test and it
+   read as a light switch. The keystone now shows the opinion of eating a villager ramping
+   −0.250 → −0.976 across its fifteen punishments instead of snapping to −1.0 on the first.
+
+   Applied to the leaf **value** only, never to the split choice: information gain should see the
+   evidence as it actually is, or the tree would refuse to split on genuine patterns merely because
+   they are young.
 
 Trees are capped at `max_tree_depth` (6) and experiences at `max_experiences` (200). Eviction
 drops the oldest member of the **over-represented** feedback class — evicting the plain oldest
@@ -141,6 +154,30 @@ uniform at any temperature. Temperature governs how decisively it acts on what i
 | Learning by being shown (leash of learning) | `learn_from_demonstration` | `shown_weight` (0.6) |
 | Learning by imitation | `learn_from_imitation` | `imitation_weight` (0.25) |
 
+### Teaching by demonstration
+
+The genre's central mechanic, and the closest thing the original had to a thesis: you lead the
+creature somewhere, you do a thing, and it learns from having watched you. `Creature.witness()` is
+the entry point and it returns whether the lesson actually landed.
+
+Three rules, each of which was wrong in the first version and made the mechanic reachable only by
+accident:
+
+- **It must be able to see it.** A demonstration outside `perception_radius` teaches nothing.
+  Previously a rock thrown on the far side of the island taught as well as one thrown at its feet,
+  which made the learning leash decorative.
+- **Off the leash it must be closer still** — `imitation_reach_fraction` of perception — because
+  glancing over at something is not the same as being shown it.
+- **The lesson is filed under the desire that owns the action** (`OpinionStore.desire_for_action`),
+  so healing is recorded against Compassion. Everything used to go to Curiosity whatever it was
+  about; the cross-desire fallback meant the knowledge was still reachable, but it made the Mind
+  Inspector's account of *why* the creature acted a fiction.
+
+The player's real acts teach: throwing (cruel for a villager, unremarkable for a rock), and the
+miracles whose effect the creature could imitate — heal, water, lightning. Food and wood teach
+nothing and are deliberately absent from `MIRACLE_LESSONS`, because the creature cannot conjure
+matter and should not form an opinion about doing so.
+
 Explicit feedback credits every action still inside `feedback_window` (6 s), scaled by how long
 ago it happened. Credit assignment must have a horizon or a slap five minutes later would blame
 whatever the creature happened to do first.
@@ -175,10 +212,6 @@ instead of buried in sampling noise.
 
 ## 9. Known gaps
 
-- **Learning is currently one-shot.** A single experience produces a pure ID3 leaf at ±1.0, so one
-  slap fully forms an opinion. It satisfies the acceptance test and it is not *wrong*, but it will
-  likely feel abrupt in play. The fix when it comes should weight a leaf's confidence by its
-  sample count rather than trusting a single example outright.
 - Object-less actions (`sleep`, `dance`, `defecate`) are enumerated against nearby objects rather
   than against the creature itself, which reads oddly in the inspector.
 - `query_near` is a linear scan. Fine for the low hundreds of objects at 5 Hz.

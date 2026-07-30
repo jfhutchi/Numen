@@ -87,8 +87,13 @@ func test_id3_learns_pattern() -> void:
 	var low: float = ID3.predict(tree, PackedFloat32Array([0.15, 0.77, 0.44]), _tunables)
 	gut.p("held-out predictions: high=%.3f low=%.3f" % [high, low])
 
-	assert_gt(high, 0.5, "high attribute-0 example should predict good feedback")
-	assert_lt(low, -0.5, "low attribute-0 example should predict bad feedback")
+	# Signs and separation, not absolute magnitudes: leaf values are now shrunk
+	# toward neutral by how little evidence they rest on (three examples per branch
+	# carry half their face value), so a threshold of 0.5 was testing the shrinkage
+	# constant rather than whether the tree had learned the pattern.
+	assert_gt(high, 0.0, "high attribute-0 example should predict good feedback")
+	assert_lt(low, 0.0, "low attribute-0 example should predict bad feedback")
+	assert_gt(high - low, 0.5, "and the two should be clearly apart")
 
 
 func test_id3_returns_a_leaf_when_nothing_separates_the_examples() -> void:
@@ -100,7 +105,23 @@ func test_id3_returns_a_leaf_when_nothing_separates_the_examples() -> void:
 	]
 	var tree: Id3.TreeNode = ID3.induce(experiences, 3, _tunables)
 	assert_true(tree.is_leaf())
-	assert_almost_eq(tree.value, 1.0, 0.001)
+
+	# Positive but not yet certain: three unanimous experiences are still only three.
+	assert_gt(tree.value, 0.0, "three positive experiences should read positive")
+	assert_lt(tree.value, 1.0, "but three of anything is not total conviction")
+
+	# The claim worth testing is that conviction GROWS with evidence, which pins the
+	# behaviour rather than the constant. Twelve of the same lesson must land nearer
+	# its face value than three did.
+	var many: Array = experiences.duplicate()
+	for i in 9:
+		many.append(_experience([0.4, 0.4, 0.4], 1.0))
+	var confident: Id3.TreeNode = ID3.induce(many, 3, _tunables)
+	gut.p("unanimous evidence: 3 examples read %.3f, 12 read %.3f" % [
+		tree.value, confident.value
+	])
+	assert_gt(confident.value, tree.value, "more evidence should mean more conviction")
+	assert_lt(confident.value, 1.001, "and never overshoot the evidence itself")
 
 
 func test_id3_handles_no_experience_at_all() -> void:
@@ -130,8 +151,20 @@ func test_id3_weights_shift_the_prediction() -> void:
 		ID3.Experience.new(PackedFloat32Array([0.9]), -1.0, 0.1),
 	]
 	var tree: Id3.TreeNode = ID3.induce(light, 1, _tunables)
-	assert_gt(ID3.predict(tree, PackedFloat32Array([0.9]), _tunables), 0.5,
-		"the heavily weighted example should dominate")
+	var predicted: float = ID3.predict(tree, PackedFloat32Array([0.9]), _tunables)
+	gut.p("one +1 at weight 1.0 against one -1 at weight 0.1 reads %.3f" % predicted)
+	# Positive is the whole claim: the heavy example wins the argument. The margin
+	# is a function of the shrinkage constant, not of whether weighting works.
+	assert_gt(predicted, 0.0, "the heavily weighted example should dominate")
+
+	# And reversing the weights must reverse the verdict, which no absolute
+	# threshold on one direction could establish.
+	var flipped: Array = [
+		ID3.Experience.new(PackedFloat32Array([0.9]), 1.0, 0.1),
+		ID3.Experience.new(PackedFloat32Array([0.9]), -1.0, 1.0),
+	]
+	assert_lt(ID3.predict(ID3.induce(flipped, 1, _tunables), PackedFloat32Array([0.9]), _tunables),
+		0.0, "swapping the weights should swap which lesson wins")
 
 
 func test_decision_path_explains_the_prediction() -> void:
