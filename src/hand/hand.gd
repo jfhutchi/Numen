@@ -20,6 +20,9 @@ const VELOCITY_WINDOW := 6
 ## Exported unjoined, so the fingers arrive as separate nodes and can be curled by
 ## rotating them — no rig, no animation player, and it costs one node per digit.
 const HAND_SCENE := "res://assets/procedural/meshes/hand.glb"
+## The carried villager's mesh — the same model the crowd draws, so the person in
+## the grasp is the person that vanished from the ground.
+const VILLAGER_SCENE := "res://assets/procedural/meshes/villager.glb"
 ## Finger joints, in the order they curl. Named in the .glb.
 const FINGER_JOINTS: Array[StringName] = [
 	&"finger_0", &"finger_1", &"finger_2", &"finger_3", &"thumb"
@@ -323,12 +326,63 @@ func _track(point: Vector3, delta: float) -> void:
 		_deltas.remove_at(0)
 
 
+## What sits in the grasp, per type.
+##
+## The hand was written when only trees and rocks were grabbable, and it asked the
+## scatter for every carried visual. The scatter has no villager or food mesh, so
+## build_detached_visual returned a MeshInstance3D with a null mesh — the player
+## picked a villager up and the hand closed on nothing while the crowd went on
+## drawing the villager wherever its record happened to be. An invisible carry is
+## the one failure a passing suite cannot see, so the regression test asserts a
+## real mesh under the held body.
+func _carried_visual(object: WorldObject) -> Node3D:
+	match object.type:
+		&"tree", &"rock":
+			return _scatter.build_detached_visual(object) if _scatter != null else null
+		&"villager":
+			if ResourceLoader.exists(VILLAGER_SCENE):
+				var packed: PackedScene = load(VILLAGER_SCENE)
+				if packed != null:
+					# The scene keeps its internal stand-up offset, so it hangs
+					# base-at-origin exactly like the collider convention below.
+					return packed.instantiate() as Node3D
+			var fallback := MeshInstance3D.new()
+			var capsule := CapsuleMesh.new()
+			capsule.radius = 0.3
+			capsule.height = 1.6
+			fallback.mesh = capsule
+			fallback.position = Vector3.UP * 0.8
+			return fallback
+		_:
+			# Marker-backed objects (food piles today): the marker IS the visual,
+			# so it rides along instead of staying planted where it was picked.
+			var marker := object.node as Node3D
+			if marker != null and is_instance_valid(marker) and not (marker is RigidBody3D):
+				var parent: Node = marker.get_parent()
+				if parent != null:
+					parent.remove_child(marker)
+				marker.position = Vector3.UP * 0.45
+				return marker
+			return null
+
+
+## Collision half-extents for a carried body, per type. The scatter only knows its
+## own props; a villager in a 0.8-cube collider tumbled like a crate.
+func _carried_extents(object: WorldObject) -> Vector3:
+	match object.type:
+		&"villager":
+			return Vector3(0.37, 0.87, 0.29)
+		&"food_pile":
+			return Vector3(0.45, 0.45, 0.45)
+		_:
+			return _scatter.detached_extents(object) if _scatter != null \
+				else Vector3(0.8, 0.7, 0.8)
+
+
 ## Finds or builds the physics body for an object being picked up.
 func _acquire_body(object: WorldObject) -> RigidBody3D:
 	if object.node != null and is_instance_valid(object.node) and object.node is RigidBody3D:
 		return object.node as RigidBody3D
-	if _scatter == null:
-		return null
 
 	var body := RigidBody3D.new()
 	body.name = "Detached_%d" % object.id
@@ -339,14 +393,21 @@ func _acquire_body(object: WorldObject) -> RigidBody3D:
 	body.angular_damp_mode = RigidBody3D.DAMP_MODE_REPLACE
 	body.angular_damp = 0.4
 
-	var extents: Vector3 = _scatter.detached_extents(object)
+	# Where it stood, read BEFORE the visual is built: for marker-backed objects
+	# the visual step reparents the marker, and current_position() reads the node.
+	var spawn: Vector3 = object.current_position()
+
+	var extents: Vector3 = _carried_extents(object)
 	var shape := BoxShape3D.new()
 	shape.size = extents * 2.0
 	var collision := CollisionShape3D.new()
 	collision.shape = shape
 	collision.position = Vector3.UP * extents.y
 	body.add_child(collision)
-	body.add_child(_scatter.build_detached_visual(object))
+
+	var visual: Node3D = _carried_visual(object)
+	if visual != null:
+		body.add_child(visual)
 
 	# Parented to the hand's own parent rather than to current_scene, which is
 	# null outside a booted game (headless test runs, tool scripts).
@@ -354,8 +415,10 @@ func _acquire_body(object: WorldObject) -> RigidBody3D:
 	if container == null:
 		container = self
 	container.add_child(body)
-	body.global_position = object.current_position()
+	body.global_position = spawn
 
-	_scatter.hide_instance(object)
+	if _scatter != null:
+		# No-op for anything the scatter does not own; it guards by id.
+		_scatter.hide_instance(object)
 	object.node = body
 	return body

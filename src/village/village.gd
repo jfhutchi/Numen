@@ -918,7 +918,14 @@ func _push_villagers() -> void:
 	var count: int = mini(_villagers.size(), multimesh.instance_count)
 	for index in count:
 		var villager: Villager = _villagers[index]
-		_write_villager(index, _villager_transform(index, villager))
+		if villager.is_hand_held():
+			# The divine hand's body carries the visible villager for the whole
+			# grasp-and-flight; drawing the crowd instance too put a second copy at
+			# wherever the record last was — the player picked someone up and saw
+			# them still standing by the hut.
+			_write_villager(index, _hidden_transform())
+		else:
+			_write_villager(index, _villager_transform(index, villager))
 		if _villager_colours_dirty:
 			# Consumed as linear, like every other colour here.
 			multimesh.set_instance_color(index, _job_colour(villager.job).srgb_to_linear())

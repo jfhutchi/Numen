@@ -418,6 +418,14 @@ func _finish_work() -> void:
 ## villager's job: once the body has been let go and has stopped moving, the
 ## villager takes its landing spot, drops the body and lives on. Without that it
 ## stays pinned wherever it was put down and starves standing up.
+## True while a physics body — the divine hand's grasp, or the flight after a
+## throw — owns this villager's position. The crowd batch hides the instance for
+## the duration: the body carries the visible villager, and drawing both put a
+## second copy at whatever spot the record last held.
+func is_hand_held() -> bool:
+	return object != null and is_instance_valid(object.node) and object.node is RigidBody3D
+
+
 func _sync_record() -> void:
 	if object != null:
 		if object.node != null and is_instance_valid(object.node):
