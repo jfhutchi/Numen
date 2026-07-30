@@ -8,8 +8,10 @@ script = ExtResource("1_main")
 [node name="BootLayer" type="CanvasLayer" parent="."]
 
 [node name="BootLabel" type="Label" parent="BootLayer"]
+; Below the tutorial panel, which anchors top-left and is 430 px wide. The two
+; were drawn over each other and the HUD line was unreadable behind it.
 offset_left = 16.0
-offset_top = 12.0
+offset_top = 104.0
 offset_right = 616.0
-offset_bottom = 152.0
+offset_bottom = 244.0
 text = "NUMEN"

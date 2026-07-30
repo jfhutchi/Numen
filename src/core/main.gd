@@ -13,6 +13,11 @@ const HAND := preload("res://src/hand/hand.gd")
 const CREATURE := preload("res://src/creature/body/creature.gd")
 const MIND_INSPECTOR := preload("res://src/ui/mind_inspector.gd")
 const VILLAGE := preload("res://src/village/village.gd")
+const CONSCIENCE := preload("res://src/ui/conscience.gd")
+const TUTORIAL := preload("res://src/ui/tutorial.gd")
+const GESTURE_GUIDE := preload("res://src/ui/gesture_guide.gd")
+const CREATURE_THOUGHT := preload("res://src/ui/creature_thought.gd")
+const AUDIO_DIRECTOR := preload("res://src/audio/audio_director.gd")
 
 const SAVE_PATH := "user://numen_save.json"
 ## Gestures are drawn with the middle mouse button: left is the hand, right is
@@ -28,6 +33,11 @@ var camera_rig: Node3D
 var hand: Node3D
 var creature: CharacterBody3D
 var inspector: PanelContainer
+var conscience: Conscience
+var tutorial: Tutorial
+var gesture_guide: GestureGuide
+var thought: CreatureThought
+var audio: AudioDirector
 
 var home_village: Node3D
 var rival_village: Node3D
@@ -46,6 +56,15 @@ var _registry: Node
 var _hud_label: Label
 var _status_label: Label
 var _stroke: Line2D
+## Last alignment descriptor seen, so drift is reported on the change rather than
+## every frame it stays true.
+var _last_descriptor: String = ""
+var _idle_seconds: float = 0.0
+## Seconds of the player doing nothing before the voices suggest something.
+var _idle_nudge_after: float = 25.0
+## Food in the home store below which the village counts as going hungry.
+var _hungry_food_threshold: float = 20.0
+
 var _drawing: bool = false
 var _stroke_points: PackedVector2Array = PackedVector2Array()
 var _influence_ring: MeshInstance3D
@@ -72,6 +91,13 @@ func _ready() -> void:
 	add_child(scatter)
 	scatter.populate(island, _registry)
 
+	# Built and tested in an earlier phase and called by absolutely nothing until
+	# now. Created early so the creature and the UI can both be handed it.
+	audio = AUDIO_DIRECTOR.new()
+	audio.name = "Audio"
+	add_child(audio)
+	audio.start_ambient()
+
 	_build_villages()
 	_scatter_food()
 
@@ -93,6 +119,14 @@ func _ready() -> void:
 	_build_save_layer()
 	_build_ui()
 
+	# The home village already believes; the rival is the one to win over.
+	#
+	# Seeded here rather than in _build_miracles because crossing the conversion
+	# threshold emits village_converted, which the conscience listens for — and the
+	# conscience does not exist until _build_ui has run. Doing it during
+	# construction called observe() on a null and aborted _ready half-built.
+	conversion.add_belief(&"home", 40.0)
+
 	print("\n".join(boot_report()))
 
 
@@ -104,6 +138,38 @@ func _process(delta: float) -> void:
 	influence.set_belief(conversion.total_belief())
 	_update_influence_ring()
 	_update_status()
+	_update_advisors(delta)
+
+
+## Feeds the voices, the guide and the tutorial the state they watch.
+func _update_advisors(delta: float) -> void:
+	conscience.set_alignment(alignment.value())
+	gesture_guide.update_prayer(prayer.current())
+
+	# Drift is reported off AlignmentTracker.descriptor(), which already owns a
+	# threshold, rather than inventing a second one here that could disagree with
+	# the words the HUD is showing.
+	var descriptor: String = alignment.descriptor()
+	if descriptor != _last_descriptor:
+		_last_descriptor = descriptor
+		if descriptor == "merciful":
+			conscience.observe(&"drifting_kind")
+		elif descriptor == "cruel":
+			conscience.observe(&"drifting_cruel")
+
+	if home_village.store.stock_of(&"food") < _hungry_food_threshold:
+		conscience.observe(&"village_hungry")
+
+	# An idle nudge only when the player is doing nothing, so it suggests rather
+	# than interrupts. The conscience's own rate limiting stops it nagging.
+	if camera_rig.pan_input() != Vector2.ZERO:
+		tutorial.notify(Tutorial.EV_CAMERA_PANNED, {"delta": delta})
+		_idle_seconds = 0.0
+
+	_idle_seconds += delta
+	if _idle_seconds > _idle_nudge_after:
+		_idle_seconds = 0.0
+		conscience.observe(&"idle_nudge")
 
 
 # --- construction -------------------------------------------------------------
@@ -113,6 +179,8 @@ func _build_villages() -> void:
 	home_village.name = "HomeVillage"
 	add_child(home_village)
 	home_village.populate(island, _registry, _master_seed())
+	home_village.born.connect(_on_villager_born)
+	home_village.died.connect(_on_villager_died)
 
 	# A second village to convert — Definition of Done item 8. Settled away from
 	# the first by biasing its site search; it still refuses unsuitable ground.
@@ -165,6 +233,16 @@ func _spawn_creature() -> void:
 
 	var self_entry: WorldObject = _registry.add(&"creature", creature.global_position, creature)
 	creature.mind.self_object_id = self_entry.id
+	creature.acted_on.connect(_on_creature_acted)
+	creature.feedback_shown.connect(_on_creature_feedback)
+
+	# What the creature wants, over its head, so the player can watch an intention
+	# form and intervene before it acts. The Mind Inspector verifies the AI; this is
+	# for playing with it.
+	thought = CREATURE_THOUGHT.new()
+	thought.name = "Thought"
+	creature.add_child(thought)
+	thought.bind(creature.mind)
 
 
 func _build_miracles() -> void:
@@ -192,8 +270,6 @@ func _build_miracles() -> void:
 	conversion.register_village(&"home", home_village.centre_position(), home_village.population())
 	conversion.register_village(&"rival", rival_village.centre_position(), rival_village.population())
 	conversion.village_converted.connect(_on_village_converted)
-	# The home village already believes; the rival is the one to win over.
-	conversion.add_belief(&"home", 40.0)
 
 	alignment = AlignmentTracker.new()
 
@@ -233,9 +309,32 @@ func _build_ui() -> void:
 	$BootLayer.add_child(inspector)
 	inspector.bind(creature.mind)
 
+	# The two voices. Alignment comes from the AlignmentTracker, NOT from
+	# creature.mind.alignment: those are deliberately different numbers, and
+	# src/village/alignment_tracker.gd exists to say so. The creature's EMA is what
+	# it was *rewarded* for; the tracker is what the *player* did. A god who slaps
+	# their creature for every kindness should hear the cruel voice while the
+	# creature itself reads as meek — feeding the creature's number here would have
+	# had that player comforted by the merciful voice 80% of the time.
+	conscience = CONSCIENCE.new()
+	conscience.name = "Conscience"
+	$BootLayer.add_child(conscience)
+	conscience.bind_audio(audio)
+	conscience.set_alignment(alignment.value())
+	conscience.observe(&"first_boot")
+
+	tutorial = TUTORIAL.new()
+	tutorial.name = "Tutorial"
+	$BootLayer.add_child(tutorial)
+
+	gesture_guide = GESTURE_GUIDE.new()
+	gesture_guide.name = "GestureGuide"
+	$BootLayer.add_child(gesture_guide)
+	gesture_guide.bind_library(library)
+
 	_status_label = Label.new()
 	_status_label.name = "StatusLabel"
-	_status_label.position = Vector2(16.0, 128.0)
+	_status_label.position = Vector2(16.0, 220.0)
 	_status_label.add_theme_font_size_override("font_size", 13)
 	$BootLayer.add_child(_status_label)
 
@@ -253,6 +352,14 @@ func _build_ui() -> void:
 # --- input --------------------------------------------------------------------
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+		# Reported here rather than from the rig: the rig does not know the drag was
+		# the player's doing, and set_focus() is called programmatically too.
+		tutorial.notify(
+			Tutorial.EV_CAMERA_ORBITED,
+			{"pixels": (event as InputEventMouseMotion).relative.length()}
+		)
+
 	if event is InputEventMouseButton:
 		var button := event as InputEventMouseButton
 		if button.button_index == GESTURE_BUTTON:
@@ -291,11 +398,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			# without this the first thing a player does is hunt for it.
 			camera_rig.set_focus(creature.global_position)
 			_hud_label.text = "camera on the creature"
+			tutorial.notify(Tutorial.EV_CREATURE_FOUND)
+		KEY_G:
+			gesture_guide.toggle()
 		KEY_V:
 			camera_rig.set_focus(home_village.centre_position())
 			_hud_label.text = "camera on the village"
 		KEY_TAB:
 			inspector.visible = not inspector.visible
+			if inspector.visible:
+				tutorial.notify(Tutorial.EV_INSPECTOR_OPENED)
 		KEY_F5:
 			_hud_label.text = (
 				"saved to %s" % SAVE_PATH if saves.save_to(SAVE_PATH) == OK
@@ -356,6 +468,36 @@ func _stroke_length() -> float:
 
 # --- reactions ----------------------------------------------------------------
 
+## What the creature just did, translated for the voices, the tutorial and the ear.
+func _on_creature_acted(action: StringName, object: WorldObject) -> void:
+	audio.play(AudioCues.for_creature_action(action), creature.global_position)
+	if object == null:
+		return
+	match action:
+		&"eat":
+			conscience.observe(
+				&"creature_ate_villager" if object.type == &"villager" else &"creature_ate_food"
+			)
+		&"attack":
+			conscience.observe(&"creature_attacked")
+		&"sleep":
+			conscience.observe(&"creature_slept")
+
+
+func _on_creature_feedback(value: float) -> void:
+	if value >= 0.0:
+		conscience.observe(&"petted")
+		audio.play(&"pet", creature.global_position)
+		return
+	conscience.observe(&"slapped")
+	audio.play(&"slap", creature.global_position)
+	tutorial.notify(Tutorial.EV_CREATURE_SLAPPED)
+	# The step after slapping asks the player to see the opinion move, which is the
+	# one moment the whole project turns on. The mind has already recorded the
+	# feedback by the time this fires, so the change is real, not anticipated.
+	tutorial.notify(Tutorial.EV_OPINION_CHANGED)
+
+
 func _on_cast_performed(result: Dictionary) -> void:
 	var miracle: Miracle = library.by_id(result.get("id", &""))
 	if miracle != null:
@@ -363,23 +505,47 @@ func _on_cast_performed(result: Dictionary) -> void:
 		# village earn its belief. Both read the same signed weight.
 		alignment.record(miracle.alignment_weight)
 		conversion.record_act(result.get("at", Vector3.ZERO), absf(miracle.alignment_weight) * 12.0)
+		# miracle_topic() falls back to a generic topic, so a sixth miracle gets a
+		# remark rather than silence.
+		conscience.observe(ConscienceLines.miracle_topic(miracle.id))
+		audio.play(AudioCues.for_miracle(miracle.id), result.get("at", Vector3.ZERO))
+	tutorial.notify(Tutorial.EV_MIRACLE_CAST)
 	_hud_label.text = "cast %s" % result.get("id", "?")
 
 
 func _on_cast_refused(result: Dictionary) -> void:
 	_hud_label.text = "refused: %s" % result.get("reason", "?")
+	conscience.observe(&"miracle_refused")
+	audio.play(&"miracle_refused")
 
 
 func _on_village_converted(village_id: StringName) -> void:
 	_hud_label.text = "the %s village believes in you" % village_id
+	conscience.observe(&"village_converted")
+
+
+func _on_villager_born(_villager: Villager) -> void:
+	conscience.observe(&"villager_born")
+	audio.play(&"born", home_village.centre_position())
+
+
+func _on_villager_died(_villager: Villager) -> void:
+	conscience.observe(&"villager_died")
+	audio.play(&"died", home_village.centre_position())
 
 
 func _on_grabbed(object: WorldObject) -> void:
 	_hud_label.text = "holding %s" % object
+	conscience.observe(&"grabbed")
+	audio.play(&"pick_up", hand.hand_point())
+	tutorial.notify(Tutorial.EV_OBJECT_GRABBED)
 
 
 func _on_released(object: WorldObject, throw_velocity: Vector3) -> void:
 	_hud_label.text = "threw %s at %.1f m/s" % [object, throw_velocity.length()]
+	conscience.observe(&"threw")
+	audio.play(&"throw", hand.hand_point())
+	tutorial.notify(Tutorial.EV_OBJECT_THROWN)
 	# The creature watches what the player does with the world. Off the leash of
 	# learning this is only weak imitation.
 	creature.witness(&"throw", object, -0.2)
@@ -387,6 +553,7 @@ func _on_released(object: WorldObject, throw_velocity: Vector3) -> void:
 
 func _on_creature_chose(option: CreatureMind.Option) -> void:
 	_hud_label.text = "creature: %s  (p=%.0f%%)" % [option.describe(), option.probability * 100.0]
+	tutorial.notify(Tutorial.EV_CREATURE_CHOSE)
 
 
 # --- presentation -------------------------------------------------------------
