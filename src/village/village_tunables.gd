@@ -10,11 +10,22 @@ extends Resource
 @export_group("Tick budget")
 ## Decision ticks per second of simulated time. Deliberately not every frame.
 @export var decisions_per_second: float = 5.0
-## How many villagers may re-decide on one tick. The population is walked
-## round-robin, so this is the whole per-frame AI budget: a village of two
-## hundred costs exactly as much per frame as a village of eight, it just takes
-## longer to come back round to any one villager.
+## Floor on how many villagers may re-decide on one tick. The population is walked
+## round-robin, so the slice is the whole per-frame AI budget.
 @export var villagers_per_decision_tick: int = 4
+## Fraction of the population that may re-decide on one tick, once that comes to
+## more than the floor above.
+##
+## A flat count does not scale, which is why this exists. The flat slice was the
+## whole budget, and it meant the interval between a villager's turns grew with the
+## village: four per tick at five ticks a second comes back round to each of
+## twenty-four villagers every 1.2 s, but takes ten seconds over two hundred, and a
+## villager that has just finished its meal stands in the square for ten seconds
+## while the player watches it. At 0.2 that interval is one second whatever the
+## population, so what is flat is the cost per villager rather than the cost per
+## frame. Deciding is the cheap half of a step anyway — everyone advances every
+## step regardless.
+@export var decision_slice_fraction: float = 0.2
 ## How often the village re-computes its dominant need for the indicator.
 ## Cheaper than doing it on every decision tick and nobody can see the lag.
 @export var desire_refresh_seconds: float = 1.0
@@ -23,6 +34,13 @@ extends Resource
 @export var starting_population: int = 8
 ## Hard ceiling. Growth is meant to be gated by food and housing; this only stops
 ## a runaway from turning a twenty-minute test into a memory experiment.
+##
+## It also sizes the village's villager MultiMesh, which is allocated once at this
+## figure and never resized. Two hundred is the ceiling the draw-call work was done
+## for and the figure tests/behavioral/test_village_crowd.gd measures; the default
+## stays at twenty-four because that is what the twenty-minute acceptance run in
+## tests/behavioral/test_village_sim.gd was tuned against. Raising it costs one
+## MultiMesh instance per head and no draw calls at all.
 @export var max_population: int = 24
 @export var house_capacity: int = 4
 ## Jobs are handed out by cycling this list, so the mix stays proportional as the
@@ -84,7 +102,15 @@ extends Resource
 ## keeps the steering normalisation away from a zero-length vector.
 @export var arrive_radius: float = 1.2
 @export var harvest_seconds: float = 5.0
+## Food one harvest yields from a fully watered field. The best case, not a flat
+## rate: Village.harvest_yield() scales it by the field's moisture.
 @export var harvest_food: float = 8.0
+## What a bone-dry field yields, as a fraction of harvest_food. Deliberately over
+## a half rather than near zero: water is a blessing cast to do better, not a
+## chore the player must keep up with to avoid a famine, and the twenty-minute
+## acceptance run spends most of its length with every field at this floor. At
+## 0.55 a village nobody ever waters still harvests roughly twice what it eats.
+@export var harvest_dry_yield_fraction: float = 0.55
 ## Foraging is what a farmer does when the village has no field yet. Worse than
 ## farming on purpose, but it exists so a village that loses its fields can still
 ## feed itself instead of deadlocking.
@@ -104,6 +130,15 @@ extends Resource
 @export var food_target_per_villager: float = 4.0
 @export var wood_target_per_villager: float = 3.0
 
+@export_group("Field moisture")
+## Moisture a newly raised field starts with. Fields are ploughed wet, so a
+## village does not open on a drought it had no chance to prevent.
+@export var field_moisture_initial: float = 1.0
+## Moisture lost per second. At 0.0025 an unwatered field is dry in about six and
+## a half minutes, which is short enough that a twenty-minute run genuinely tests
+## the dry floor rather than coasting on the moisture it was built with.
+@export var field_moisture_decay_per_second: float = 0.0025
+
 @export_group("Building")
 @export var house_wood_cost: float = 18.0
 @export var field_wood_cost: float = 10.0
@@ -119,8 +154,21 @@ extends Resource
 ## a child. Breeding down to an empty larder is how a village dies.
 @export var birth_food_reserve: float = 12.0
 @export var birth_cooldown: float = 45.0
-## Seconds a villager survives at maximum hunger before it dies.
+## Seconds a villager at full health survives at maximum hunger before it dies.
+## This is the starvation *rate* now rather than a stopwatch — health falls by
+## 1/starve_seconds per second of famine — so the two cannot disagree, and a
+## villager the player heals halfway through gets that time back.
 @export var starve_seconds: float = 120.0
+## Health is normalised: health_max is hale, health_min is dead. Normalised rather
+## than a hit point count so the heal miracle's magnitude is a fraction of a whole
+## villager and needs no rescaling whenever the village is retuned.
+@export var health_max: float = 1.0
+@export var health_min: float = 0.0
+## Health regained per second while not starving. Slower than the drain on
+## purpose. The old code zeroed its starvation stopwatch the instant a villager
+## ate, so a village that lurched through famine after famine took no lasting
+## damage at all; convalescence means the second famine is worse than the first.
+@export var health_regen_per_second: float = 0.004
 
 @export_group("The divine hand")
 ## Speed below which a villager the hand dropped counts as landed. Under it the

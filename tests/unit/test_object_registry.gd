@@ -4,6 +4,9 @@ extends GutTest
 const REGISTRY := preload("res://src/world/object_registry.gd")
 const ISLAND := preload("res://src/world/island.gd")
 const SCATTER := preload("res://src/world/scatter.gd")
+## Asserted against below. Absent in a checkout without the generated assets, in
+## which case the scatter falls back to primitives of a different size.
+const TREE_SCENE := "res://assets/procedural/meshes/tree.glb"
 
 var _registry: Node
 
@@ -11,6 +14,20 @@ var _registry: Node
 func before_each() -> void:
 	_registry = REGISTRY.new()
 	autofree(_registry)
+
+
+## An island with scenery scattered over it. Both are freed with the test.
+func _populated_scatter(trees: int, rocks: int) -> Node3D:
+	var island: Node3D = ISLAND.new()
+	add_child_autofree(island)
+	island.generate(20260729)
+
+	var scatter: Node3D = SCATTER.new()
+	scatter.tree_count = trees
+	scatter.rock_count = rocks
+	add_child_autofree(scatter)
+	scatter.populate(island, _registry)
+	return scatter
 
 
 func test_added_objects_get_unique_ids() -> void:
@@ -152,3 +169,99 @@ func test_restoring_a_carried_prop_puts_it_back_where_it_was_dropped() -> void:
 		"a carried tree should not change size on the way back down"
 	)
 	assert_eq(target.position, dropped_at, "the world record should follow the prop")
+
+
+func test_each_prop_type_draws_from_a_single_multimesh() -> void:
+	# Trees used to be two MultiMeshes, a trunk and a canopy sharing an instance
+	# index, because a primitive carries one colour. tree.glb is one joined mesh
+	# with a material slot per part, so a second batch is pure overhead.
+	var scatter: Node3D = _populated_scatter(30, 15)
+
+	var batches: Array[String] = []
+	for child: Node in scatter.get_children():
+		if child is MultiMeshInstance3D:
+			var multimesh: MultiMesh = (child as MultiMeshInstance3D).multimesh
+			var mesh: Mesh = multimesh.mesh
+			batches.append("%s(%d instances, %d surfaces)" % [
+				child.name, multimesh.instance_count,
+				0 if mesh == null else mesh.get_surface_count()
+			])
+	gut.p("scatter MultiMeshInstance3D count = %d: %s" % [batches.size(), ", ".join(batches)])
+
+	assert_eq(batches.size(), 2, "one MultiMesh per prop type: trees and rocks")
+
+
+func test_a_carried_tree_is_built_from_the_tree_mesh_at_its_real_size() -> void:
+	var scatter: Node3D = _populated_scatter(20, 5)
+	var trees: Array[WorldObject] = _registry.query_near(Vector3.ZERO, 10000.0, [&"tree"])
+	assert_gt(trees.size(), 0, "expected the scatter to place some trees")
+	if trees.is_empty():
+		return
+	var target: WorldObject = trees[0]
+
+	var visual: Node3D = scatter.build_detached_visual(target)
+	autofree(visual)
+	var drawn: Array[Node] = visual.find_children("*", "MeshInstance3D", true, false)
+	var bounds := AABB()
+	var surfaces: int = 0
+	for node: Node in drawn:
+		var mesh: Mesh = (node as MeshInstance3D).mesh
+		if mesh == null:
+			continue
+		surfaces += mesh.get_surface_count()
+		bounds = bounds.merge((node as MeshInstance3D).transform * mesh.get_aabb())
+	gut.p("carried tree visual: %d MeshInstance3D, %d surfaces, bounds %s" % [
+		drawn.size(), surfaces, bounds.size
+	])
+
+	assert_eq(drawn.size(), 1, "a carried tree should be one mesh, not a trunk plus a canopy")
+	assert_gt(surfaces, 0, "a carried tree with no surfaces would be invisible")
+	# Loose on purpose: the primitive fallback trunk is under a metre tall.
+	assert_gt(bounds.size.y, 0.5, "and an empty mesh would have no extent at all")
+
+	# The hand builds the grabbed body's box from these, so they have to describe
+	# the mesh rather than the primitive that used to stand in for it.
+	var scale: float = scatter.visual_transform(target).basis.get_scale().y
+	var extents: Vector3 = scatter.detached_extents(target)
+	var size: Vector3 = extents * 2.0 / scale
+	gut.p("tree instance scale %.3f, half-extents %s, unscaled mesh size %s" % [
+		scale, extents, size
+	])
+	if not ResourceLoader.exists(TREE_SCENE):
+		pass_test("tree.glb is not in this checkout; the primitive fallback is in use")
+		return
+	assert_almost_eq(size.x, 2.36, 0.05, "collision width should match tree.glb")
+	assert_almost_eq(size.y, 5.15, 0.05, "collision height should match tree.glb")
+	assert_almost_eq(size.z, 2.21, 0.05, "collision depth should match tree.glb")
+
+
+func test_scattered_trees_vary_in_scale_and_yaw() -> void:
+	# A forest stamped from one transform is the failure this guards: every tree
+	# the same size, all facing the same way.
+	var scatter: Node3D = _populated_scatter(40, 5)
+	var trees: Array[WorldObject] = _registry.query_near(Vector3.ZERO, 10000.0, [&"tree"])
+	assert_gt(trees.size(), 1, "need at least two trees to compare")
+	if trees.size() < 2:
+		return
+
+	var scales: Array[float] = []
+	var yaws: Array[float] = []
+	for tree: WorldObject in trees:
+		var basis: Basis = scatter.visual_transform(tree).basis
+		scales.append(basis.get_scale().y)
+		# Read off the facing vector rather than get_euler(), which assumes an
+		# orthonormal basis this one is not.
+		var facing: Vector3 = (basis * Vector3.FORWARD).normalized()
+		yaws.append(atan2(facing.x, facing.z))
+	scales.sort()
+	yaws.sort()
+
+	var scale_spread: float = scales[scales.size() - 1] - scales[0]
+	var yaw_spread: float = yaws[yaws.size() - 1] - yaws[0]
+	gut.p("%d trees: scale %.3f..%.3f (spread %.3f), yaw %.2f..%.2f rad (spread %.2f)" % [
+		trees.size(), scales[0], scales[scales.size() - 1], scale_spread,
+		yaws[0], yaws[yaws.size() - 1], yaw_spread
+	])
+
+	assert_gt(scale_spread, 0.05, "instances should differ in size")
+	assert_gt(yaw_spread, 0.5, "instances should differ in yaw")
