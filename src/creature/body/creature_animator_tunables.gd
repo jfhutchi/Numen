@@ -34,16 +34,6 @@ extends Resource
 ## once and settles, instead of bouncing until something else interrupts it.
 @export var play_duration: float = 1.4
 
-@export_group("Rig")
-## Parts of the body sitting at or above this height are treated as riding on
-## the neck, so they nod together. The creature is procedural geometry with no
-## skeleton and no named bones, so height is the only honest way to tell the
-## head and eyes from the torso. See creature.gd: torso 1.3, head 2.7, eyes 2.85.
-@export var head_part_min_height: float = 2.0
-## Point the head rotates about. Roughly where a neck would be, so a nod swings
-## the head forward and down rather than spinning it on the spot.
-@export var head_pivot_height: float = 2.2
-
 @export_group("Locomotion")
 ## Speed in m/s above which the creature is considered to be walking.
 @export var walk_speed_threshold: float = 0.5
@@ -59,25 +49,51 @@ extends Resource
 @export var idle_frequency: float = 0.55
 @export var idle_bob: float = 0.035
 @export var idle_head_nod: float = 0.03
+## How much the torso swells as it breathes, as a fraction of its girth.
+@export var idle_breath: float = 0.045
+@export var idle_tail_sway: float = 0.10
+## Ears flick rather than waving: an amplitude, how often, and how much of each
+## period the flick occupies. A duty of 1.0 turns the flick into a wave.
+@export var idle_ear_twitch: float = 0.32
+@export var idle_ear_twitch_period: float = 4.3
+@export var idle_ear_twitch_duty: float = 0.12
 
 @export_group("Walk")
 ## Strides per second at the reference speed.
 @export var walk_frequency: float = 1.35
+## Lift of the whole body per step. Always upward — the term is an absolute sine —
+## because there is no foot IK: a bob that went negative would drive the paws
+## through the ground, while one that only rises lifts them off it, which at this
+## amplitude reads as bounce rather than as floating.
 @export var walk_bob: float = 0.12
 @export var walk_roll: float = 0.09
 ## Constant forward lean while moving. Sells intent more than the bob does.
 @export var walk_lean: float = 0.07
 @export var walk_head_nod: float = 0.06
+## Peak fore-and-aft swing of each leg at the hip. This is the number that has to
+## stay small: past about 0.6 the thigh rotates up into the torso and the paw
+## comes out of the creature's own ribs.
+@export var walk_leg_swing: float = 0.42
+## Peak knee flex during the forward half of a leg's cycle.
+@export var walk_knee_bend: float = 0.55
+@export var walk_tail_sway: float = 0.14
 
 @export_group("Eat")
 @export var eat_squash: float = 0.22
 @export var eat_sink: float = 0.18
 @export var eat_head_dip: float = 0.55
+@export var eat_jaw_open: float = 0.45
+## Whole chews per meal. Whole numbers only, or the mouth is left hanging open
+## when the state ends.
+@export var eat_chews: float = 3.0
 
 @export_group("Attack")
 @export var attack_lunge: float = 0.9
 @export var attack_pitch: float = 0.35
 @export var attack_head_thrust: float = 0.25
+@export var attack_jaw_open: float = 0.5
+## Ears back, the way anything about to bite holds them.
+@export var attack_ear_pin: float = 0.35
 
 @export_group("Hurt")
 @export var hurt_recoil: float = 0.45
@@ -86,6 +102,10 @@ extends Resource
 @export var hurt_roll: float = 0.28
 ## Shakes over the length of the recoil.
 @export var hurt_shakes: float = 2.0
+## The flinch: head thrown back, ears flat, tail tucked under.
+@export var hurt_head_recoil: float = 0.3
+@export var hurt_ear_flatten: float = 0.6
+@export var hurt_tail_tuck: float = 0.5
 
 @export_group("Celebrate")
 @export var celebrate_hops: float = 3.0
@@ -93,12 +113,19 @@ extends Resource
 ## Whole turns over the length of the celebration. Fractional values leave the
 ## creature facing the wrong way when it ends.
 @export var celebrate_spins: float = 1.0
+## Tail up and wagging hard. This is the pet response, so it is the one pose the
+## player will read as gratitude.
+@export var celebrate_tail_lift: float = 0.55
+@export var celebrate_tail_wag: float = 0.6
+## Whole wags over the length of the celebration.
+@export var celebrate_wags: float = 5.0
 
 @export_group("Play")
 @export var play_frequency: float = 2.4
 @export var play_bob: float = 0.3
 @export var play_roll: float = 0.22
 @export var play_head_nod: float = 0.2
+@export var play_tail_wag: float = 0.4
 
 @export_group("Sleep")
 @export var sleep_frequency: float = 0.28
@@ -106,6 +133,8 @@ extends Resource
 @export var sleep_breath: float = 0.07
 @export var sleep_head_dip: float = 0.5
 @export var sleep_roll: float = 0.12
+## Knees folded so the creature is lying rather than standing asleep.
+@export var sleep_leg_fold: float = 0.85
 
 
 ## Seconds this state plays before it falls back. Zero means it loops until

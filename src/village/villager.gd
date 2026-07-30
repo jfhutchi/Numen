@@ -48,11 +48,15 @@ var visual_lift: float = 0.0
 var job: StringName = FARMER
 var position: Vector3 = Vector3.ZERO
 var alive: bool = true
+## Body condition, normalised: 1.0 hale, 0.0 dead. Kept apart from the food need
+## on purpose — hunger is what the villager feels and acts on, health is what
+## ignoring it costs. Starvation is the only thing that lowers it today, and it is
+## the single gate on death, so the heal miracle has something real to save.
+var health: float = 1.0
 var needs: Dictionary[StringName, float] = {}
 ## What it last decided to do. Readable state, for the inspector and the tests.
 var current_need: StringName = &""
 var age_seconds: float = 0.0
-var starving_seconds: float = 0.0
 ## Metres walked. A villager that never moves is a bug, and this is how a test
 ## catches one without watching it.
 var distance_travelled: float = 0.0
@@ -94,6 +98,7 @@ func _init(
 	_store = store
 	_village = village
 	_rng = rng
+	health = tunables.health_max
 	for need: StringName in NEEDS:
 		# Jittered so a generation of villagers does not get hungry in lockstep
 		# and queue at the store on the same second. Work is left at zero: its
@@ -167,6 +172,21 @@ func level_of(need: StringName) -> float:
 	return float(needs.get(need, 0.0))
 
 
+## Mends the villager and reports how much health was actually restored: less than
+## `amount` for one already nearly hale, and zero for one at full health or one
+## already dead. Callers report this figure rather than the amount they asked for,
+## so a miracle cast over a healthy village can honestly say it changed nothing.
+##
+## Deliberately does not touch hunger. Heal mends the body; it does not fill the
+## belly, so a healed villager still has to go and eat or it will be back here.
+func heal(amount: float) -> float:
+	if not alive or amount <= 0.0 or is_nan(amount):
+		return 0.0
+	var before: float = health
+	health = clampf(health + amount, _tunables.health_min, _tunables.health_max)
+	return health - before
+
+
 ## Gives back any outstanding claim. Called when the villager dies mid-errand —
 ## otherwise its reservation would sit on the store forever and the village would
 ## slowly reserve itself to a standstill.
@@ -182,8 +202,9 @@ func abandon_task() -> void:
 
 
 func describe() -> String:
-	return "%s#%d %s food=%.2f sleep=%.2f" % [
-		job, object.id if object != null else -1, current_need, needs[FOOD], needs[SLEEP]
+	return "%s#%d %s food=%.2f sleep=%.2f health=%.2f" % [
+		job, object.id if object != null else -1, current_need,
+		needs[FOOD], needs[SLEEP], health,
 	]
 
 
@@ -223,11 +244,22 @@ func _drift(delta: float) -> void:
 	)
 
 	if needs[FOOD] >= 1.0:
-		starving_seconds += delta
-		if starving_seconds >= _tunables.starve_seconds:
+		# Exactly the rate the old stopwatch implied — a villager at full health that
+		# never eats still dies after starve_seconds — but spent out of health rather
+		# than counted off a clock, so a heal genuinely buys the villager its time
+		# back. Death still goes through _die() and nowhere else: a second exit would
+		# skip abandon_task() and leave the villager's claim reserved on the store
+		# forever.
+		health = maxf(health - delta / maxf(_tunables.starve_seconds, 0.001),
+			_tunables.health_min)
+		if health <= _tunables.health_min:
 			_die()
 	else:
-		starving_seconds = 0.0
+		# Convalescence rather than a reset. The old code zeroed its stopwatch the
+		# instant a villager ate, so a village lurching from famine to famine took no
+		# lasting damage at all; recovering at a rate means the second famine is
+		# worse than the first, which is when the player should be reaching for heal.
+		health = minf(health + _tunables.health_regen_per_second * delta, _tunables.health_max)
 
 
 func _die() -> void:
@@ -330,7 +362,6 @@ func _finish() -> void:
 			_store.commit(_claim)
 			_claim = 0
 			needs[FOOD] = clampf(needs[FOOD] - _tunables.meal_relief, 0.0, 1.0)
-			starving_seconds = 0.0
 		SLEEP:
 			needs[SLEEP] = clampf(needs[SLEEP] - _tunables.sleep_relief, 0.0, 1.0)
 		WORSHIP:
@@ -365,9 +396,12 @@ func _finish_work() -> void:
 		PRIEST:
 			_village.record_worship()
 		_:
+			# The field's own yield rather than a flat rate: a dry field pays less,
+			# which is the whole of what the water miracle is for. Foraging is
+			# unaffected — a hedgerow is nobody's to irrigate.
 			_store.add(
 				VillageStore.FOOD,
-				_tunables.harvest_food if _site != null else _tunables.forage_food
+				_village.harvest_yield(_site) if _site != null else _tunables.forage_food
 			)
 			_site = null
 

@@ -6,13 +6,42 @@ extends GutTest
 
 const REGISTRY := preload("res://src/world/object_registry.gd")
 
-## Stand-in for the village. The whole point of the duck-typed `village` in
-## miracle_effects.gd is that the one property the effects actually reach for is
-## enough — and the store is the real VillageStore, so a deposit that the live
+## Stand-in for a village. The whole point of the duck-typed `villages` in
+## miracle_effects.gd is that the handful of members the effects actually reach for
+## is enough — and the store is the real VillageStore, so a deposit that the live
 ## village would reject is rejected here too.
+##
+## The two effect methods carry the real village's signature and record what they
+## were asked for, so a test can prove the miracle reached the village rather than
+## trusting the count the effect wrote about itself. Each reports one thing
+## changed, which is what a village holding one hurt villager and one dry field
+## would answer — and two of these in one blast must therefore report two, which is
+## what the game's home-and-rival pair does.
+##
+## What a *real* village then does with a heal, and that the effect's join to it has
+## the arity and parameter order it thinks it has, is proved against the real Village
+## in tests/behavioral/test_village_sim.gd, not here.
 class StubVillage:
 	extends RefCounted
 	var store := VillageStore.new()
+	## The store record this village owns, or null for a stub that owns none — which
+	## is every stub but the pair in the two-village test. Shaped like
+	## Village.storehouse() so the wood effect can tell two villages' storehouses
+	## apart by record id, the only way it can when both are in one registry.
+	var owned_store: WorldObject = null
+	var heal_calls: Array[Dictionary] = []
+	var water_calls: Array[Dictionary] = []
+
+	func storehouse() -> WorldObject:
+		return owned_store
+
+	func heal_villagers_near(point: Vector3, radius: float, amount: float) -> int:
+		heal_calls.append({"at": point, "radius": radius, "amount": amount})
+		return 1
+
+	func water_fields_near(point: Vector3, radius: float, amount: float) -> int:
+		water_calls.append({"at": point, "radius": radius, "amount": amount})
+		return 1
 
 
 var _tunables: MiracleTunables
@@ -431,11 +460,98 @@ func test_wood_falls_back_to_trees_when_there_is_no_village_to_take_it() -> void
 	assert_eq(trees, int(miracle.magnitude), "so the timber has to become a forest instead")
 
 
+func test_heal_and_water_degrade_to_reporting_when_there_is_no_village() -> void:
+	# The registry-only wiring, and the reason MiracleEffects duck-types the village
+	# rather than importing it. A world with fields and villagers registered but
+	# nothing behind them that owns moisture or health must still name what the
+	# miracle reached and honestly report changing nothing — not crash on a null, and
+	# not claim credit for a change nobody applied.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 313
+	var field: WorldObject = _registry.add(&"wheat_field", Vector3(2.0, 0.0, 0.0))
+	var villager: WorldObject = _registry.add(&"villager", Vector3(-2.0, 0.0, 0.0))
+
+	var villageless := MiracleEffects.new(_registry, rng, null)
+	var watered: Dictionary = villageless.apply(_library.by_id(&"water"), Vector3.ZERO)
+	var healed: Dictionary = villageless.apply(_library.by_id(&"heal"), Vector3.ZERO)
+
+	# A village that is present but does not answer to these two methods — a smaller
+	# stub, or one mid-refactor — has to be as harmless as no village at all, which
+	# is why the guard is has_method and not a null check alone.
+	var mute_village := RefCounted.new()
+	var mute := MiracleEffects.new(_registry, rng, mute_village)
+	var mute_heal: Dictionary = mute.apply(_library.by_id(&"heal"), Vector3.ZERO)
+
+	gut.p("no village: water reached %d changed %d, heal reached %d changed %d" % [
+		(watered["affected"] as Array).size(), int(watered["changed"]),
+		(healed["affected"] as Array).size(), int(healed["changed"]),
+	])
+	gut.p("a village with neither method: heal reached %d changed %d" % [
+		(mute_heal["affected"] as Array).size(), int(mute_heal["changed"])
+	])
+	assert_true(watered["handled"], "water is still a handled miracle with no village")
+	assert_true(healed["handled"])
+	assert_true((watered["affected"] as Array).has(field.id), "and still reports what it reached")
+	assert_true((healed["affected"] as Array).has(villager.id))
+	assert_eq(int(watered["changed"]), 0, "but there is no moisture behind the field record")
+	assert_eq(int(healed["changed"]), 0, "and nothing owning the villager's health")
+	assert_eq(int(mute_heal["changed"]), 0)
+	assert_gt((mute_heal["affected"] as Array).size(), 0,
+		"a village that cannot heal must not stop the strike being reported")
+
+
+func test_both_villages_answer_a_miracle_cast_over_them() -> void:
+	# Regression, and the assertion that would have caught it. The game has two
+	# villages, home and rival, and both register their people, fields and storehouse
+	# with the *same* object registry. With a single village on the effects object,
+	# water and heal cast over the rival found its fields and villagers in the registry
+	# and reported them to the VFX layer, while the change went to the home village's
+	# own arrays — so the miracle played and nothing happened, and `changed` came back
+	# zero. Casting kind miracles near the rival is precisely how its belief is earned,
+	# so that was the main path for both effects.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 606
+	var home := StubVillage.new()
+	var rival := StubVillage.new()
+	var pair := MiracleEffects.new(_registry, rng, [home, rival])
+	_registry.add(&"wheat_field", Vector3(1.0, 0.0, 0.0))
+	_registry.add(&"villager", Vector3(-1.0, 0.0, 0.0))
+
+	var watered: Dictionary = pair.apply(_library.by_id(&"water"), Vector3.ZERO)
+	var healed: Dictionary = pair.apply(_library.by_id(&"heal"), Vector3.ZERO)
+	gut.p("two villages under one cast: water changed %d, heal changed %d" % [
+		int(watered["changed"]), int(healed["changed"])
+	])
+	assert_eq(int(watered["changed"]), 2, "a disc is a place, not a faction: both were in it")
+	assert_eq(int(healed["changed"]), 2, "and heal has to sum the same way")
+	assert_eq(home.water_calls.size(), 1, "each village asked exactly once")
+	assert_eq(rival.water_calls.size(), 1)
+	assert_eq(home.heal_calls.size(), 1)
+	assert_eq(rival.heal_calls.size(), 1)
+
+	# The same trap on the wood miracle, which the plural seam alone does not close:
+	# two storehouses in one registry, so the timber has to land in the stock of the
+	# village that owns the one in the blast rather than in whichever village the
+	# effects object happens to list first.
+	var wood: Miracle = _library.by_id(&"wood")
+	rival.owned_store = _registry.add(&"store", Vector3(30.0, 0.0, 0.0))
+	home.owned_store = _registry.add(&"store", Vector3(-30.0, 0.0, 0.0))
+	var delivered: Dictionary = pair.apply(wood, rival.owned_store.position)
+	gut.p("wood over the rival's storehouse: home holds %.1f, rival holds %.1f" % [
+		home.store.stock_of(VillageStore.WOOD), rival.store.stock_of(VillageStore.WOOD)
+	])
+	assert_eq(rival.store.stock_of(VillageStore.WOOD), wood.magnitude,
+		"the timber belongs to the village whose storehouse was struck")
+	assert_eq(home.store.stock_of(VillageStore.WOOD), 0.0,
+		"and not to whichever village comes first in the list")
+	assert_eq(float(delivered["deposited"]), wood.magnitude)
+
+
 func test_water_and_heal_reach_exactly_what_is_in_range() -> void:
 	# Everything here is registered the way the village registers it: a record and
-	# no node. These two miracles report rather than change — see the ponytail
-	# notes in miracle_effects.gd — so what is provable is that they pick out the
-	# right objects, which is what a moisture or health model would then act on.
+	# no node. `affected` is the list the VFX layer draws from, so what it has to
+	# get right is which objects were in reach; that the village was then actually
+	# told to water and mend them is asserted at the bottom.
 	_power.set_current(200.0)
 	var water: Miracle = _library.by_id(&"water")
 	var heal: Miracle = _library.by_id(&"heal")
@@ -450,8 +566,10 @@ func test_water_and_heal_reach_exactly_what_is_in_range() -> void:
 	)
 	var beast: WorldObject = _registry.add(&"creature", Vector3(1.0, 0.0, -1.0))
 
-	var watered: Array = _caster.try_cast(&"water", Vector3.ZERO)["effect"]["affected"]
-	var healed: Array = _caster.try_cast(&"heal", Vector3.ZERO)["effect"]["affected"]
+	var water_effect: Dictionary = _caster.try_cast(&"water", Vector3.ZERO)["effect"]
+	var heal_effect: Dictionary = _caster.try_cast(&"heal", Vector3.ZERO)["effect"]
+	var watered: Array = water_effect["affected"]
+	var healed: Array = heal_effect["affected"]
 	gut.p("water reached %s of the fields, heal reached %s" % [watered.size(), healed.size()])
 
 	assert_true(watered.has(near_field.id), "the field under the cast should have been watered")
@@ -465,6 +583,23 @@ func test_water_and_heal_reach_exactly_what_is_in_range() -> void:
 	assert_true(healed.has(beast.id), "healing your own creature is the point of the miracle")
 	assert_false(healed.has(far_villager.id), "a villager outside the radius is out of reach")
 	assert_false(healed.has(near_field.id), "heal is for the living")
+
+	# And the half these two used to be missing: the village is actually told, with
+	# the miracle's own radius and magnitude, and the count it answers with is what
+	# the summary reports. Passing magnitude where radius belongs would water the
+	# whole island for one point of moisture, and only these four lines would notice.
+	gut.p("village asked to water %s and to heal %s; changed %d and %d" % [
+		_village.water_calls, _village.heal_calls,
+		int(water_effect["changed"]), int(heal_effect["changed"])
+	])
+	assert_eq(_village.water_calls.size(), 1, "water must reach the village, not just the report")
+	assert_eq(_village.heal_calls.size(), 1, "and so must heal")
+	assert_eq(float(_village.water_calls[0]["radius"]), water.effect_radius)
+	assert_eq(float(_village.water_calls[0]["amount"]), water.magnitude)
+	assert_eq(float(_village.heal_calls[0]["radius"]), heal.effect_radius)
+	assert_eq(float(_village.heal_calls[0]["amount"]), heal.magnitude)
+	assert_eq(int(water_effect["changed"]), 1, "the summary reports what the village changed")
+	assert_eq(int(heal_effect["changed"]), 1)
 
 
 func test_lightning_destroys_scenery_but_never_erases_a_living_thing() -> void:
@@ -515,7 +650,7 @@ func test_every_miracle_has_an_effect_that_does_something() -> void:
 	# of ids in the report is not evidence: an effect that appends an id and then
 	# forgets to act would pass one and fail these. The unmatched arm is the trap
 	# for a sixth miracle added without an assertion here.
-	gut.p("miracle | handled | spawned | affected | removed | deposited")
+	gut.p("miracle | handled | spawned | affected | removed | deposited | changed")
 	for miracle: Miracle in _library.all():
 		var world: Node = REGISTRY.new()
 		autofree(world)
@@ -531,12 +666,13 @@ func test_every_miracle_has_an_effect_that_does_something() -> void:
 		var effects := MiracleEffects.new(world, rng, village)
 		var summary: Dictionary = effects.apply(miracle, Vector3.ZERO)
 
-		gut.p("%-9s | %7s | %7d | %8d | %7d | %9.1f" % [
+		gut.p("%-9s | %7s | %7d | %8d | %7d | %9.1f | %7d" % [
 			miracle.id, str(summary["handled"]),
 			(summary["spawned"] as Array).size(),
 			(summary["affected"] as Array).size(),
 			(summary["removed"] as Array).size(),
 			float(summary["deposited"]),
+			int(summary["changed"]),
 		])
 		assert_true(summary["handled"], "%s has no effect wired up" % miracle.id)
 		assert_eq(float(summary["alignment_weight"]), miracle.alignment_weight)
@@ -554,9 +690,16 @@ func test_every_miracle_has_an_effect_that_does_something() -> void:
 			&"water":
 				assert_true((summary["affected"] as Array).has(field.id),
 					"water should reach the field it was cast over")
+				assert_eq(village.water_calls.size(), 1,
+					"and the water should have got as far as the village")
+				assert_eq(int(summary["changed"]), 1,
+					"and the summary should report what the village changed")
 			&"heal":
 				assert_true((summary["affected"] as Array).has(villager.id),
 					"heal should reach the villager it was cast over")
+				assert_eq(village.heal_calls.size(), 1,
+					"and the healing should have got as far as the village")
+				assert_eq(int(summary["changed"]), 1)
 			&"lightning":
 				assert_null(world.get_object(tree.id), "lightning should burn the tree")
 				assert_not_null(world.get_object(villager.id),

@@ -5,20 +5,30 @@ extends RefCounted
 ## Split from MiracleCaster so the caster — the rules about cost and reach — can
 ## be tested with no world at all. Wire the two together with two lines:
 ##
-##     var effects := MiracleEffects.new(get_node_or_null(^"/root/World"), rng, village)
+##     var effects := MiracleEffects.new(
+##         get_node_or_null(^"/root/World"), rng, [home_village, rival_village]
+##     )
 ##     caster.bind_effects(effects)
 ##
 ## Use bind_effects rather than assigning caster.effect_handler directly: a
 ## Callable does not keep a RefCounted alive on its own.
 ##
-## Both the registry and the village arrive as constructor parameters and are only
+## Both the registry and the villages arrive as constructor parameters and are only
 ## ever duck-typed, so the standalone `object_registry.gd` instance the tests build
 ## works exactly like the live autoload, and a five-line stub works like the real
 ## village. Never name the autoload directly in here: GDScript resolves `World` at
 ## compile time and the script then fails to compile anywhere the autoload is
-## absent, test runs included. The village is held as a bare Object for a
+## absent, test runs included. The villages are held as bare Objects for a
 ## different reason — the same one Villager holds its village that way: naming the
 ## type would make the two modules cyclically dependent and neither would compile.
+##
+## Plural, and that is the whole of why: the game has two villages, home and rival,
+## and both register their people and fields with the *same* object registry. With
+## one village here, water and heal cast over the rival found its fields and
+## villagers in the registry and reported them to the VFX layer, while the change
+## itself went to the home village's own arrays — so the miracle played and nothing
+## happened. Casting kind miracles near the rival is how its belief is earned, so
+## that was the main path for both effects.
 ##
 ## Effects act on the registry and on the village's own public API, never through
 ## `WorldObject.node`. Almost nothing in this world has a node: the village
@@ -50,19 +60,27 @@ const HEAL_TYPES: Array[StringName] = [&"villager", &"creature"]
 const RESOURCE_WOOD := &"wood"
 
 var registry: Object = null
-## The village, or null when there is none — a unit test, or the world before
+## Every village whose people, fields and stock these effects may change — home and
+## rival alike. Empty when there is none: a unit test, or the world before
 ## populate(). Every use of it degrades to "do the registry-only thing".
-var village: Object = null
+var villages: Array = []
 var rng: RandomNumberGenerator
 
 
 func _init(
 	world_registry: Object = null,
 	generator: RandomNumberGenerator = null,
-	owning_village: Object = null
+	owning_villages: Variant = null
 ) -> void:
 	registry = world_registry
-	village = owning_village
+	# One village or a list of them, normalised here so no caller has to care and
+	# the single-village wiring the tests use keeps working unchanged.
+	if owning_villages is Array:
+		for one: Variant in owning_villages:
+			if one != null:
+				villages.append(one)
+	elif owning_villages != null:
+		villages.append(owning_villages)
 	if generator != null:
 		rng = generator
 	else:
@@ -83,6 +101,10 @@ func apply(miracle: Miracle, at: Vector3) -> Dictionary:
 	var affected: Array[int] = []
 	var removed: Array[int] = []
 	var deposited: float = 0.0
+	# How many things the miracle genuinely altered, as opposed to reached. Heal and
+	# water both touch everything in range and change only what was short of full,
+	# so reporting `affected` as the effect would overstate both of them.
+	var changed: int = 0
 	var handled: bool = true
 
 	if miracle == null or registry == null:
@@ -96,25 +118,32 @@ func apply(miracle: Miracle, at: Vector3) -> Dictionary:
 				# A storehouse standing in the blast takes the timber straight into
 				# the village's stock. Growing a forest on top of the village
 				# square instead would be worse than useless.
-				if store != null and _deposit_wood(miracle.magnitude):
+				if store != null and _deposit_wood(miracle.magnitude, store):
 					deposited = miracle.magnitude
 					affected.append(store.id)
 				else:
 					spawned = _scatter(&"tree", at, miracle.effect_radius, int(miracle.magnitude))
 			&"water":
-				# ponytail: reports the fields it reached and changes nothing else.
-				# The village has no moisture or per-field yield to write into —
-				# harvest_food is a flat number — so there is no honest place to
-				# put the water yet. The ids are what the VFX layer draws from
-				# meanwhile; wire the magnitude to the field when fields grow one.
+				# The ids are what the VFX layer draws. The magnitude is moisture, and
+				# the villages are the only things that own any, so the count of fields
+				# that were not already soaked has to come back from them.
 				for field: WorldObject in _near(at, miracle.effect_radius, [&"wheat_field"]):
 					affected.append(field.id)
+				changed = _village_change(
+					&"water_fields_near", at, miracle.effect_radius, miracle.magnitude
+				)
 			&"heal":
-				# ponytail: same as water. Villager has needs and `alive` but no
-				# health, and the creature has no body script yet, so there is
-				# nothing to mend. Reported, not applied, until one of them does.
+				# Same shape as water. `affected` includes the creature, so the VFX
+				# layer still lights it up, but the count comes from the villages and
+				# covers villagers only.
+				# ponytail: the creature has no health of its own, so healing it is
+				# still only a light show. One `heal()` on the creature's body and a
+				# second _village_change-shaped call here when it grows one.
 				for hurt: WorldObject in _near(at, miracle.effect_radius, HEAL_TYPES):
 					affected.append(hurt.id)
+				changed = _village_change(
+					&"heal_villagers_near", at, miracle.effect_radius, miracle.magnitude
+				)
 			&"lightning":
 				for victim: WorldObject in _near(at, miracle.effect_radius, []):
 					if LIGHTNING_DESTROYS.has(victim.type):
@@ -124,6 +153,10 @@ func apply(miracle: Miracle, at: Vector3) -> Dictionary:
 						# Struck, but left standing: something else owns whether it
 						# died, and until that system exists the strike only
 						# reports what it hit. See LIGHTNING_DESTROYS.
+						# ponytail: villagers have health now, so lightning could
+						# take it off them — but a strike that kills has to answer
+						# for the houses and fields in the same blast, and nothing
+						# owns their teardown. Deliberately still report-only.
 						affected.append(victim.id)
 			_:
 				handled = false
@@ -136,6 +169,7 @@ func apply(miracle: Miracle, at: Vector3) -> Dictionary:
 		"affected": affected,
 		"removed": removed,
 		"deposited": deposited,
+		"changed": changed,
 		"alignment_weight": miracle.alignment_weight if miracle != null else 0.0,
 	}
 
@@ -162,18 +196,57 @@ func _scatter(type: StringName, at: Vector3, radius: float, count: int) -> Array
 	return ids
 
 
-## Puts timber in the village's stock. False when there is no village to take it
-## — which is what sends the wood miracle back to growing trees instead.
-func _deposit_wood(amount: float) -> bool:
-	if village == null:
+## Puts timber in the stock of the village that owns `store`. False when no village
+## can take it — which is what sends the wood miracle back to growing trees instead.
+##
+## The owner is matched by record id rather than simply taking the first village
+## that has a stock, for the same reason the seam is plural at all: both villages
+## register their storehouse with the one registry, so without the match, wood cast
+## over the rival's storehouse quietly filled the home village's larder. A village
+## that does not answer to storehouse() — a five-line test stub — falls through to
+## the first stock that will take it, which is all such a stub ever needed.
+func _deposit_wood(amount: float, store: WorldObject) -> bool:
+	var owner_stock: Object = null
+	var any_stock: Object = null
+	for one: Object in villages:
+		if one == null:
+			continue
+		# get() rather than a typed access: the village is duck-typed, and a stub or a
+		# village before populate() has no store at all.
+		var stock: Object = one.get("store")
+		if stock == null or not stock.has_method("add"):
+			continue
+		if any_stock == null:
+			any_stock = stock
+		if store != null and one.has_method("storehouse"):
+			var record: WorldObject = one.storehouse()
+			if record != null and record.id == store.id:
+				owner_stock = stock
+	var target: Object = owner_stock if owner_stock != null else any_stock
+	if target == null:
 		return false
-	# get() rather than a typed access: the village is duck-typed, and a stub or a
-	# village before populate() has no store at all.
-	var stock: Object = village.get("store")
-	if stock == null or not stock.has_method("add"):
-		return false
-	stock.add(RESOURCE_WOOD, amount)
+	target.add(RESOURCE_WOOD, amount)
 	return true
+
+
+## Asks every village to change something in a disc and reports how much of it
+## actually changed, summed. Summed rather than asked of one village because the
+## disc is a place, not a faction: a miracle cast between the two settlements
+## reaches whatever is in range of it, and each village only ever answers for its
+## own people and fields.
+##
+## Zero when there is no village behind the records — a unit test, or the world
+## before populate() — and zero for any village that does not answer to this
+## method, which is what keeps the five-line stub villages in the tests working.
+## Duck-typed for the reason at the top of this file: naming the village's type
+## would make the two modules cyclically dependent.
+func _village_change(method: StringName, at: Vector3, radius: float, amount: float) -> int:
+	var changed: int = 0
+	for one: Object in villages:
+		if one == null or not one.has_method(method):
+			continue
+		changed += int(one.call(method, at, radius, amount))
+	return changed
 
 
 func _near(at: Vector3, radius: float, types: Array) -> Array:
