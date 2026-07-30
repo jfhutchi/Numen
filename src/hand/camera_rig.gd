@@ -16,6 +16,10 @@ extends Node3D
 @export var smoothing: float = 12.0
 ## Keeps the focus point inside the island rather than drifting out to sea.
 @export var pan_limit: float = 90.0
+## Minimum height the camera keeps above the terrain (or the waterline, over the
+## sea). Without it a shallow-pitched orbit clipped straight through hillsides —
+## the lerp path between two legal positions is not itself checked by anything.
+@export var ground_clearance: float = 1.6
 
 var camera: Camera3D
 
@@ -145,9 +149,26 @@ func _apply(weight: float) -> void:
 	var offset := Vector3(0.0, 0.0, _distance).rotated(Vector3.RIGHT, _pitch).rotated(
 		Vector3.UP, _yaw
 	)
-	var wanted: Vector3 = _focus + offset
-	camera.global_position = camera.global_position.lerp(wanted, weight)
+	var wanted: Vector3 = _keep_above_ground(_focus + offset)
+	# Clamped again AFTER the lerp, not only before it: both endpoints of a lerp
+	# can be legally above ground while the path between them passes through a
+	# ridge, and a smoothed camera spends many frames on that path. Orbiting low
+	# across a hill clipped straight through the hillside.
+	camera.global_position = _keep_above_ground(
+		camera.global_position.lerp(wanted, weight)
+	)
 	camera.look_at(_focus, Vector3.UP)
+
+
+## The position lifted clear of the terrain under it. Over the sea the floor is
+## the water plane, so a low orbit cannot dive beneath the waves either.
+func _keep_above_ground(at: Vector3) -> Vector3:
+	if _island == null:
+		return at
+	var floor_y: float = maxf(_island.height_at(at.x, at.z), 0.0) + ground_clearance
+	if at.y < floor_y:
+		at.y = floor_y
+	return at
 
 
 ## Where the camera is pointing, for systems that need to follow it.
