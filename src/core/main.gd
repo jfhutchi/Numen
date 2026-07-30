@@ -67,6 +67,9 @@ var _registry: Node
 var _hud_label: Label
 var _status_label: Label
 var _stroke: Line2D
+## The stroke drawn in the world itself, at terrain height under the pointer. The
+## 2D line stays as the recogniser's input record; this is presentation.
+var _trail: GestureTrail
 ## Last alignment descriptor seen, so drift is reported on the change rather than
 ## every frame it stays true.
 var _last_descriptor: String = ""
@@ -78,7 +81,7 @@ var _hungry_food_threshold: float = 20.0
 
 var _drawing: bool = false
 var _stroke_points: PackedVector2Array = PackedVector2Array()
-var _influence_ring: MeshInstance3D
+var _influence_ring: InfluenceRing
 
 
 func _ready() -> void:
@@ -284,17 +287,11 @@ func _build_miracles() -> void:
 
 	alignment = AlignmentTracker.new()
 
-	_influence_ring = MeshInstance3D.new()
-	_influence_ring.name = "InfluenceRing"
-	var ring := TorusMesh.new()
-	ring.inner_radius = 0.9
-	ring.outer_radius = 1.0
-	_influence_ring.mesh = ring
-	var ring_material := StandardMaterial3D.new()
-	ring_material.albedo_color = Color(0.55, 0.75, 1.0, 0.45).srgb_to_linear()
-	ring_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	ring_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_influence_ring.material_override = ring_material
+	# The third shape this ring has worn. The torus intersected hills as a blue
+	# band; a flat shader disc was depth-tested away by the terrain over land. The
+	# ribbon drapes the boundary over the ground itself.
+	_influence_ring = InfluenceRing.new()
+	_influence_ring.set_island(island)
 	add_child(_influence_ring)
 
 
@@ -348,6 +345,10 @@ func _build_ui() -> void:
 	_status_label.position = Vector2(16.0, 220.0)
 	_status_label.add_theme_font_size_override("font_size", 13)
 	$BootLayer.add_child(_status_label)
+
+	_trail = GestureTrail.new()
+	_trail.set_island(island)
+	add_child(_trail)
 
 	# The stroke the player is drawing, so a gesture is something you can see
 	# rather than something you hope registered.
@@ -435,11 +436,14 @@ func _begin_stroke(at: Vector2) -> void:
 	_drawing = true
 	_stroke_points = PackedVector2Array([at])
 	_stroke.points = _stroke_points
+	_trail.begin()
+	_trail.extend(hand.hand_point())
 
 
 func _extend_stroke(at: Vector2) -> void:
 	_stroke_points.append(at)
 	_stroke.points = _stroke_points
+	_trail.extend(hand.hand_point())
 
 
 ## Recognises the drawn stroke and casts the miracle it names, at the ground
@@ -447,6 +451,7 @@ func _extend_stroke(at: Vector2) -> void:
 func _finish_stroke() -> void:
 	_drawing = false
 	_stroke.points = PackedVector2Array()
+	_trail.end_stroke()
 	if _stroke_points.size() < 4 or _stroke_length() < MIN_STROKE_LENGTH:
 		_stroke_points = PackedVector2Array()
 		return
@@ -511,6 +516,11 @@ func _on_creature_feedback(value: float) -> void:
 
 func _on_cast_performed(result: Dictionary) -> void:
 	var miracle: Miracle = library.by_id(result.get("id", &""))
+	# The signature action of the whole genre, invisible until now. The effect
+	# frees itself when its emitters finish; a cast per second accumulates nothing.
+	MiracleVfx.for_miracle(result.get("id", &"")).play_at(
+		self, result.get("at", Vector3.ZERO)
+	)
 	if miracle != null:
 		# Miracles shape the player's alignment, and impressive acts near a
 		# village earn its belief. Both read the same signed weight.
@@ -599,11 +609,11 @@ func _on_creature_chose(option: CreatureMind.Option) -> void:
 # --- presentation -------------------------------------------------------------
 
 func _update_influence_ring() -> void:
-	var centre: Vector3 = influence.centre
-	_influence_ring.global_position = Vector3(
-		centre.x, maxf(island.height_at(centre.x, centre.z), 0.0) + 0.6, centre.z
-	)
-	_influence_ring.scale = Vector3(influence.radius, 1.0, influence.radius)
+	_influence_ring.set_centre(influence.centre)
+	_influence_ring.set_radius(influence.radius)
+	# Brightness follows prayer: a ring that dims as power runs out tells the
+	# player they cannot cast before the refusal does.
+	_influence_ring.set_strength(prayer.fraction())
 
 
 func _update_status() -> void:
