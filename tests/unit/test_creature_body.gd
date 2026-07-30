@@ -347,8 +347,8 @@ func test_the_rig_is_deterministic() -> void:
 func test_the_rigged_body_loads_the_wolf_with_its_animation_player() -> void:
 	# The creature's whole point is being watchable, so the asset actually
 	# resolving matters more than any single property of it.
-	if not ResourceLoader.exists(CREATURE.WOLF_SCENE):
-		pass_test("wolf asset absent from this checkout; the primitive rig covers it")
+	if CREATURE.preferred_rig().is_empty():
+		pass_test("no rigged asset in this checkout; the primitive rig covers it")
 		return
 
 	var creature: Creature = _rigged_creature()
@@ -366,8 +366,8 @@ func test_every_animation_state_maps_to_a_clip_the_wolf_actually_has() -> void:
 	# A state with no clip freezes the creature mid-pose. Mapping by hand is
 	# exactly the kind of thing that rots when either side is edited, so it is
 	# checked against the rig rather than against a list.
-	if not ResourceLoader.exists(CREATURE.WOLF_SCENE):
-		pass_test("wolf asset absent from this checkout")
+	if CREATURE.preferred_rig().is_empty():
+		pass_test("no rigged asset in this checkout")
 		return
 
 	var creature: Creature = _rigged_creature()
@@ -376,8 +376,9 @@ func test_every_animation_state_maps_to_a_clip_the_wolf_actually_has() -> void:
 		return
 	var available: PackedStringArray = player.get_animation_list()
 
-	for state: StringName in CREATURE.WOLF_CLIPS:
-		var wanted: String = String(CREATURE.WOLF_CLIPS[state])
+	var clips: Dictionary = CREATURE.preferred_rig()["clips"]
+	for state: StringName in clips:
+		var wanted: String = String(clips[state])
 		var found := false
 		for candidate: String in available:
 			if candidate == wanted or candidate.get_slice("|", 1) == wanted:
@@ -390,8 +391,8 @@ func test_every_animation_state_maps_to_a_clip_the_wolf_actually_has() -> void:
 func test_the_rigged_body_still_gets_a_collision_shape() -> void:
 	# Regression. The first version returned early once the wolf loaded and never
 	# built the collider, so the creature fell straight through the island.
-	if not ResourceLoader.exists(CREATURE.WOLF_SCENE):
-		pass_test("wolf asset absent from this checkout")
+	if CREATURE.preferred_rig().is_empty():
+		pass_test("no rigged asset in this checkout")
 		return
 
 	var creature: Creature = _rigged_creature()
@@ -402,8 +403,8 @@ func test_the_rigged_body_still_gets_a_collision_shape() -> void:
 
 
 func test_the_rigged_body_tints_by_overlay_so_the_wolfs_own_materials_survive() -> void:
-	if not ResourceLoader.exists(CREATURE.WOLF_SCENE):
-		pass_test("wolf asset absent from this checkout")
+	if CREATURE.preferred_rig().is_empty():
+		pass_test("no rigged asset in this checkout")
 		return
 
 	var creature: Creature = _rigged_creature()
@@ -470,3 +471,32 @@ func test_a_creature_on_dry_land_is_left_alone() -> void:
 	creature.global_position = where
 	creature._keep_out_of_the_sea()
 	assert_eq(creature.global_position, where, "a creature on land should not be teleported")
+
+
+# --- It grows up ---------------------------------------------------------------
+
+func test_the_creature_grows_from_cub_to_adult_with_age() -> void:
+	# The mind already ages — learning rate and temperature decay — but the body
+	# never showed it: the creature arrived adult-sized and stayed that way. Size
+	# is the one channel a player reads at a glance.
+	var creature: Creature = _islanded_creature()
+	creature.mind.age_seconds = 0.0
+	assert_almost_eq(creature.growth_scale(), creature.growth_start_scale, 0.001,
+		"a newborn starts at the cub scale")
+
+	creature.mind.age_seconds = creature.growth_full_age * 0.5
+	var half: float = creature.growth_scale()
+	assert_between(half, creature.growth_start_scale + 0.01, 0.99,
+		"halfway through childhood it should be visibly between cub and adult")
+
+	creature.mind.age_seconds = creature.growth_full_age * 3.0
+	assert_almost_eq(creature.growth_scale(), 1.0, 0.001,
+		"an adult stops growing rather than becoming a kaiju")
+
+	# Monotonic: age must never shrink it.
+	var previous: float = 0.0
+	for step in 12:
+		creature.mind.age_seconds = creature.growth_full_age * float(step) / 10.0
+		var now: float = creature.growth_scale()
+		assert_gte(now, previous, "growth must never reverse")
+		previous = now

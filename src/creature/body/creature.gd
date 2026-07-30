@@ -95,8 +95,28 @@ const SKIN_NEUTRAL := Color(0.55, 0.45, 0.38)
 const SKIN_CRUEL := Color(0.32, 0.13, 0.14)
 const SKIN_KIND := Color(0.62, 0.58, 0.40)
 
-## The rigged CC0 wolf. Absent from a checkout without assets, in which case the
-## primitive rig below is built instead — see _build_body().
+## The rigged CC0 biped — an upright walking companion, which is how the genre's
+## creatures carried themselves. Preferred over the wolf when present.
+const BIPED_SCENE := "res://assets/third_party/quaternius/ultimate-monsters/yeti.glb"
+
+## The biped's clips. Two stand-ins are deliberate and should be replaced if the
+## rig ever grows the real thing: eat maps to Duck (it crouches to the ground,
+## which reads as feeding at gameplay distance), and sleep to Idle (the animator
+## would fall back there anyway; mapping it keeps the choice visible). Wave for a
+## pet response reads as delight; Punch is the attack.
+const BIPED_CLIPS: Dictionary = {
+	&"idle": "Idle",
+	&"walk": "Walk",
+	&"eat": "Duck",
+	&"sleep": "Idle",
+	&"attack": "Punch",
+	&"hurt": "HitReact",
+	&"celebrate": "Wave",
+	&"play": "Run",
+}
+
+## The rigged CC0 wolf, kept as the fallback body. Absent from a checkout without
+## assets, in which case the primitive rig below is built instead.
 const WOLF_SCENE := "res://assets/third_party/quaternius/ultimate-animated-animals/wolf.glb"
 
 ## Which baked clip each animation state plays. The wolf happens to ship a clip
@@ -117,11 +137,24 @@ const WOLF_CLIPS: Dictionary = {
 ## bounds are unreliable: a skinned mesh reports its bind-pose AABB, and the
 ## armature's IK pole targets inflate the source model's height to 5.26 units.
 @export var wolf_scale: float = 1.7
+## Same story for the biped: bind-pose bounds are meaningless, so the scale is
+## set against the villager it towers over. 2.0 puts the adult at roughly 2.6 m —
+## head and shoulders over a 1.73 m villager without dwarfing the huts.
+@export var biped_scale: float = 2.1
 
 ## Set false to force the primitive rig even when the asset is present. The
 ## articulation tests use this: they assert on named parts and a shared skin
 ## material, neither of which a skinned mesh has.
 @export var prefer_rigged_body: bool = true
+
+## Fraction of adult size at birth. The mind already grows up — learning rate and
+## softmax temperature both decay with age — and nothing showed it: the creature
+## arrived full-sized and stayed that way for life. Now the body agrees with the
+## mind about what age means.
+@export_range(0.1, 1.0) var growth_start_scale: float = 0.72
+## Seconds of age at which the creature reaches full size. Matches the pacing of
+## the mind's own temperature_halflife scale rather than being realistic.
+@export var growth_full_age: float = 1200.0
 
 ## How much of its perception range the creature learns by imitation within, as a
 ## fraction. Off the learning leash it is only glancing over rather than being
@@ -150,7 +183,13 @@ var _target: WorldObject = null
 ## One material shared by every skin part, so tinting the creature is one write
 ## rather than a walk of the rig.
 var _skin_material: StandardMaterial3D
+var _body_root: Node3D = null
+## The scale the body was built at; growth multiplies this rather than replacing
+## it, because the rigged and primitive bodies are built at different base sizes.
+var _built_scale: Vector3 = Vector3.ONE
 var _wolf_player: AnimationPlayer = null
+## The state-to-clip map of whichever rig was actually built.
+var _rig_clips: Dictionary = {}
 var _wolf_mesh: MeshInstance3D = null
 var _alignment_overlay: StandardMaterial3D = null
 var _parts: Dictionary[StringName, Node3D] = {}
@@ -183,7 +222,7 @@ func _ready() -> void:
 	animator.configure(get_node_or_null(^"Body") as Node3D)
 	if _wolf_player != null:
 		# Rigged body: the state machine drives baked clips.
-		animator.bind_animation_player(_wolf_player, WOLF_CLIPS)
+		animator.bind_animation_player(_wolf_player, _rig_clips)
 	else:
 		# configure() only learns the root. The named parts are what let it
 		# articulate a gait instead of bobbing the whole creature as one lump.
@@ -284,6 +323,9 @@ func _physics_process(delta: float) -> void:
 	if animator != null:
 		animator.set_locomotion_speed(Vector2(velocity.x, velocity.z).length())
 		animator.advance(delta)
+
+	if _body_root != null:
+		_body_root.scale = _built_scale * growth_scale()
 
 
 func _decide() -> void:
@@ -398,17 +440,18 @@ func _build_body() -> void:
 	var root := Node3D.new()
 	root.name = "Body"
 	add_child(root)
+	_body_root = root
 
-	# Prefer the rigged wolf. A hand-assembled quadruped of capsules and boxes
-	# reads as a diagram of an animal; a skinned mesh with baked clips reads as an
-	# animal. The primitive rig is kept as the fallback for a checkout without the
-	# asset, and it is what the animator's articulation tests drive — the state
-	# machine is identical either way.
+	# Rig preference: the upright biped first — the genre's creatures walked on
+	# two legs, and an upright companion at eye height with the player's villages
+	# is most of what makes it read as a being rather than a pet — then the wolf,
+	# then the hand-assembled primitive rig for a checkout with no assets at all.
 	#
 	# The collider is built below either way. An earlier version returned early on
 	# the rigged path and the creature had no collision shape at all, so it fell
 	# through the island the moment gravity touched it.
-	if not (prefer_rigged_body and _build_wolf(root)):
+	var rig: Dictionary = preferred_rig()
+	if not (prefer_rigged_body and not rig.is_empty() and _build_rigged(root, rig)):
 		_skin_material = default_skin()
 		_parts = build_rig(root, _skin_material)
 
@@ -423,14 +466,23 @@ func _build_body() -> void:
 	# spend its life standing in a hole.
 	shape.position = Vector3(0.0, COLLIDER_HEIGHT * 0.5, 0.0)
 	add_child(shape)
+	_built_scale = _body_root.scale
 
 
-## Instances the CC0 rigged wolf under `root`. Returns false when the asset is
-## absent, so the caller falls back to the primitive rig.
-func _build_wolf(root: Node3D) -> bool:
-	if not ResourceLoader.exists(WOLF_SCENE):
-		return false
-	var packed: PackedScene = load(WOLF_SCENE)
+## The best rigged body this checkout has: the biped, else the wolf, else none.
+## Static so the tests can interrogate the same preference the build uses.
+static func preferred_rig() -> Dictionary:
+	if ResourceLoader.exists(BIPED_SCENE):
+		return {"scene": BIPED_SCENE, "clips": BIPED_CLIPS, "scale": &"biped"}
+	if ResourceLoader.exists(WOLF_SCENE):
+		return {"scene": WOLF_SCENE, "clips": WOLF_CLIPS, "scale": &"wolf"}
+	return {}
+
+
+## Instances a rigged CC0 body under `root`. Returns false when loading fails,
+## so the caller falls back to the primitive rig.
+func _build_rigged(root: Node3D, rig: Dictionary) -> bool:
+	var packed: PackedScene = load(rig["scene"])
 	if packed == null:
 		return false
 
@@ -438,7 +490,8 @@ func _build_wolf(root: Node3D) -> bool:
 	if instance == null:
 		return false
 	root.add_child(instance)
-	root.scale = Vector3.ONE * wolf_scale
+	root.scale = Vector3.ONE * (biped_scale if rig["scale"] == &"biped" else wolf_scale)
+	_rig_clips = rig["clips"]
 
 	_wolf_player = _find_first(instance, "AnimationPlayer") as AnimationPlayer
 	_wolf_mesh = _find_skinned_mesh(instance)
@@ -701,6 +754,14 @@ static func _cone(radius: float, height: float) -> CylinderMesh:
 	mesh.radial_segments = 12
 	mesh.rings = 1
 	return mesh
+
+
+## How grown the creature is, as a multiplier on its built size: growth_start at
+## birth easing to 1.0 at growth_full_age. Smoothstepped so the visible growing
+## happens in the middle of childhood rather than as a linear creep.
+func growth_scale() -> float:
+	var progress: float = clampf(mind.age_seconds / maxf(growth_full_age, 1.0), 0.0, 1.0)
+	return lerpf(growth_start_scale, 1.0, smoothstep(0.0, 1.0, progress))
 
 
 func _flash_with(colour: Color) -> void:

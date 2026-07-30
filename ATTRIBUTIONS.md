@@ -37,6 +37,7 @@ goes with it.
 
 | Path | Source URL | Author | Licence | Date added |
 | --- | --- | --- | --- | --- |
+| `assets/third_party/quaternius/ultimate-monsters/yeti.glb` | Pack page: https://quaternius.com/ (Ultimate Monsters) · model page: https://poly.pizza/m/ceRHrn8HHE · file: https://static.poly.pizza/40a831b3-686a-4af8-b189-a13b38a3c26a.glb | Quaternius | **CC0** — stated on the model page | 2026-07-30 |
 | `assets/third_party/quaternius/ultimate-animated-animals/wolf.glb` | Pack page: https://quaternius.com/packs/ultimateanimatedanimals.html · model page: https://poly.pizza/m/P1gU3Qkr9r · file: https://static.poly.pizza/f1d12388-e39b-4157-b32a-646a1d089fc4.glb | Quaternius | **CC0** — stated on both the pack page ("CC0 license ... free to use in personal and commercial projects") and the individual model page | 2026-07-29 |
 
 **Why this one, and why from Poly Pizza.** The creature is the only thing in NUMEN a generator
@@ -51,6 +52,10 @@ Verified after download, not assumed: the file is a valid GLB with 1 skin, 59 no
 animation clips** — `Idle`, `Idle_2`, `Idle_2_HeadLow`, `Walk`, `Gallop`, `Gallop_Jump`, `Eating`,
 `Attack`, `Death`, `Idle_HitReact_Left`, `Idle_HitReact_Right`, `Jump_ToIdle`. Materials: `Main`,
 `Main_Light`, `Eyes_Black`, `Nose`.
+
+**The biped.** The upright companion body. Verified after download: 1 skin, 14 clips —
+`Idle`, `Walk`, `Run`, `Punch`, `Duck`, `HitReact`, `Jump`, `Jump_Idle`, `Jump_Land`, `Wave`,
+`Weapon`, `Death`, `Yes`, `No`. The wolf remains as the fallback rig.
 
 CC0 imposes no attribution obligation. It is recorded anyway because the author deserves credit and
 because a future session must be able to re-verify the licence without re-deriving this research.
