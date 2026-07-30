@@ -110,3 +110,61 @@ func test_collision_heightfield_matches_the_rendered_heights() -> void:
 	assert_eq(shape.map_width, _island.resolution)
 	assert_eq(shape.map_depth, _island.resolution)
 	assert_eq(shape.map_data, _island.get_heights())
+
+
+# --- Surface materials --------------------------------------------------------
+
+func test_a_cliff_and_a_meadow_at_the_same_height_look_different() -> void:
+	# The assertion the old code could not pass. Colour was driven by altitude
+	# alone, so a cliff face and a flat meadow at the same height came out the same
+	# green and the island read as one smooth painted lump whatever its shape.
+	var height: float = _island.height_scale * 0.4
+	var flat: Color = _island._colour_for_surface(height, 0.02)
+	var cliff: Color = _island._colour_for_surface(height, 0.95)
+
+	gut.p("at height %.1f: flat %s vs steep %s" % [height, flat, cliff])
+	var difference: float = (
+		absf(flat.r - cliff.r) + absf(flat.g - cliff.g) + absf(flat.b - cliff.b)
+	)
+	assert_gt(difference, 0.05, "steep ground should be a different colour from flat ground")
+	# Specifically: rock is greyer than grass, so the green channel must lose its lead.
+	assert_gt(flat.g - flat.r, cliff.g - cliff.r,
+		"a cliff should read as rock, meaning less green-dominant than a meadow")
+
+
+func test_the_tideline_is_sandy_and_the_uplands_are_not() -> void:
+	var beach: Color = _island._colour_for_surface(0.1, 0.05)
+	var upland: Color = _island._colour_for_surface(_island.height_scale * 0.45, 0.05)
+	gut.p("beach %s vs upland %s" % [beach, upland])
+	assert_gt(beach.r, upland.r, "sand should be warmer than grass")
+	assert_gt(beach.r, beach.g, "sand should be red-dominant, grass green-dominant")
+	assert_gt(upland.g, upland.r, "upland grass should stay green")
+
+
+func test_the_surface_blends_rather_than_banding() -> void:
+	# Hard thresholds give contour bands, which read as a topographic map instead of
+	# ground. Stepping across the sand boundary must be gradual.
+	var previous: Color = _island._colour_for_surface(0.0, 0.05)
+	var biggest_jump: float = 0.0
+	for i in range(1, 40):
+		var h: float = float(i) * 0.15
+		var current: Color = _island._colour_for_surface(h, 0.05)
+		biggest_jump = maxf(biggest_jump, absf(current.r - previous.r))
+		previous = current
+	gut.p("largest single-step colour jump across the tideline: %.4f" % biggest_jump)
+	assert_lt(biggest_jump, 0.08, "a visible step here would appear as a contour line")
+
+
+func test_steepness_reads_flat_ground_as_flat() -> void:
+	# Sanity on the measurement itself, since every surface decision rests on it.
+	var flattest: float = 1.0
+	var steepest: float = 0.0
+	for iz in range(1, _island.resolution - 1, 7):
+		for ix in range(1, _island.resolution - 1, 7):
+			var s: float = _island._steepness_at(ix, iz)
+			assert_between(s, 0.0, 1.0, "steepness should stay normalised")
+			flattest = minf(flattest, s)
+			steepest = maxf(steepest, s)
+	gut.p("steepness across the island: %.3f to %.3f" % [flattest, steepest])
+	assert_lt(flattest, 0.1, "somewhere on the island should be nearly flat")
+	assert_gt(steepest, 0.2, "and somewhere should be a real slope")

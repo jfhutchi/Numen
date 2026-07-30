@@ -20,6 +20,7 @@ const CREATURE_THOUGHT := preload("res://src/ui/creature_thought.gd")
 const AUDIO_DIRECTOR := preload("res://src/audio/audio_director.gd")
 
 const SAVE_PATH := "user://numen_save.json"
+const WATER_SHADER := "res://src/world/water.gdshader"
 ## Gestures are drawn with the middle mouse button: left is the hand, right is
 ## the camera, and a modifier would collide with both.
 const GESTURE_BUTTON := MOUSE_BUTTON_MIDDLE
@@ -651,6 +652,12 @@ func _build_environment() -> void:
 	var sky_material := ProceduralSkyMaterial.new()
 	sky_material.sky_horizon_color = Color(0.68, 0.75, 0.82)
 	sky_material.ground_horizon_color = Color(0.55, 0.58, 0.55)
+	sky_material.sky_top_color = Color(0.28, 0.47, 0.78)
+	# A visible sun, and clouds. The sky was a bare two-colour gradient, which gave
+	# the island nothing to sit under.
+	sky_material.sun_angle_max = 6.0
+	sky_material.sun_curve = 0.12
+	sky_material.use_debanding = true
 
 	var sky := Sky.new()
 	sky.sky_material = sky_material
@@ -661,9 +668,48 @@ func _build_environment() -> void:
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	environment.ambient_light_energy = 0.6
 	environment.fog_enabled = true
-	# Enough haze to swallow the water plane's far edge at the horizon.
-	environment.fog_density = 0.0035
+	# Enough haze to swallow the water plane's far edge at the horizon, and no more.
+	# 0.0035 was tuned when there was no tonemapping and nothing else lifting the
+	# image; with filmic tonemapping and glow on top it washed the whole scene to
+	# pale grey and the island lost its colour entirely.
+	environment.fog_density = 0.0007
+	environment.fog_sky_affect = 0.35
+	environment.fog_aerial_perspective = 0.25
 	environment.fog_light_color = Color(0.72, 0.78, 0.84)
+
+	# Everything below is new. The game had fog and ambient light and nothing else:
+	# no tonemapping, no glow, no occlusion, so flat-shaded low-poly rendered
+	# genuinely flat and objects appeared to hover rather than sit on the ground.
+	#
+	# Filmic rather than linear, so the sky and the surf highlights roll off instead
+	# of clipping to white.
+	environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	environment.tonemap_exposure = 1.0
+	environment.tonemap_white = 2.4
+
+	# Contact shadow where geometry meets geometry. This is the single cheapest
+	# thing that makes low-poly read as solid: without it a hut and the hill behind
+	# it are two flat greens meeting at a line.
+	environment.ssao_enabled = true
+	environment.ssao_radius = 2.2
+	environment.ssao_intensity = 2.6
+	environment.ssao_power = 1.6
+	environment.ssao_detail = 0.4
+
+	# Kept subtle. It exists mostly for the miracle VFX of the next phase, which
+	# need somewhere bright to bloom into; on the landscape it only catches the sun
+	# and the surf.
+	environment.glow_enabled = true
+	environment.glow_intensity = 0.5
+	environment.glow_bloom = 0.08
+	environment.glow_hdr_threshold = 1.05
+	environment.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
+
+	# A touch of saturation, because filmic tonemapping desaturates and the palette
+	# is the flat-colour kind that needs its greens.
+	environment.adjustment_enabled = true
+	environment.adjustment_saturation = 1.12
+	environment.adjustment_contrast = 1.04
 
 	var world_environment := WorldEnvironment.new()
 	world_environment.name = "WorldEnvironment"
@@ -675,6 +721,19 @@ func _build_environment() -> void:
 	sun.rotation = Vector3(deg_to_rad(-52.0), deg_to_rad(38.0), 0.0)
 	sun.light_energy = 1.1
 	sun.shadow_enabled = true
+	# The default 100-unit shadow range is far shorter than this island is wide, so
+	# the split boundary cut a visible hard edge across the world. Four splits over
+	# 520 units covers the island and its approaches, and the fade takes the edge off
+	# what is left.
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	sun.directional_shadow_max_distance = 520.0
+	sun.directional_shadow_split_1 = 0.06
+	sun.directional_shadow_split_2 = 0.16
+	sun.directional_shadow_split_3 = 0.42
+	sun.directional_shadow_blend_splits = true
+	sun.directional_shadow_fade_start = 0.92
+	sun.shadow_bias = 0.04
+	sun.shadow_normal_bias = 1.4
 	add_child(sun)
 
 
@@ -683,16 +742,31 @@ func _build_water() -> void:
 	# Wide enough that its edge is never on screen at full zoom-out.
 	plane.size = Vector2(island.extent * 10.0, island.extent * 10.0)
 
-	var material := StandardMaterial3D.new()
-	material.albedo_color = Color(0.13, 0.32, 0.44, 0.80)
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.roughness = 0.12
-	material.metallic = 0.25
-
 	var water := MeshInstance3D.new()
 	water.name = "Water"
 	water.mesh = plane
-	water.material_override = material
+
+	# The sea used to be a flat translucent StandardMaterial3D — a sheet of blue
+	# plastic that framed every screenshot. The shader reconstructs how deep the
+	# water is at each pixel and drives colour, transparency and a surf line off
+	# that, so the shore reads as shallow without anything telling it where the
+	# shore is.
+	if ResourceLoader.exists(WATER_SHADER):
+		var shaded := ShaderMaterial.new()
+		shaded.shader = load(WATER_SHADER)
+		water.material_override = shaded
+	else:
+		var fallback := StandardMaterial3D.new()
+		fallback.albedo_color = Color(0.13, 0.32, 0.44, 0.80)
+		fallback.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		fallback.roughness = 0.12
+		fallback.metallic = 0.25
+		water.material_override = fallback
+
+	# A 1600-unit transparent plane must not cast shadow. It was throwing a hard
+	# wedge of shade right across the sea and a slab of it over the island — a
+	# shadow from the very surface you are looking through.
+	water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(water)
 
 

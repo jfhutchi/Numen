@@ -7,6 +7,12 @@ extends Node3D
 
 const RNG_STREAM := &"world"
 
+## Surface colours, authored in sRGB and converted on use.
+const SAND := Color(0.80, 0.73, 0.52)
+const GRASS_LOW := Color(0.26, 0.42, 0.17)
+const GRASS_HIGH := Color(0.38, 0.51, 0.23)
+const ROCK := Color(0.44, 0.42, 0.40)
+
 ## Samples per side. Kept at (2^n)+1 because Jolt's height-field collision wants
 ## square, power-of-two-plus-one dimensions; a stray value silently degrades to
 ## a slower fallback shape.
@@ -19,6 +25,12 @@ const RNG_STREAM := &"world"
 @export var sea_floor_depth: float = 10.0
 ## Fraction of the radius that stays full-height land before the shore falls away.
 @export var shore_start: float = 0.45
+## Where the surface materials sit. Sand fades out over this height; rock takes
+## over between these two steepness values regardless of height.
+@export var sand_band: float = 2.2
+@export_range(0.0, 1.0) var rock_slope_start: float = 0.34
+@export_range(0.0, 1.0) var rock_slope_full: float = 0.62
+
 @export var noise_frequency: float = 0.012
 @export var noise_octaves: int = 5
 
@@ -123,7 +135,7 @@ func _build_mesh() -> void:
 	for iz in resolution:
 		for ix in resolution:
 			var h: float = _sample(ix, iz)
-			surface.set_color(_colour_for_height(h))
+			surface.set_color(_colour_for_surface(h, _steepness_at(ix, iz)))
 			surface.set_uv(Vector2(float(ix) / float(resolution - 1), float(iz) / float(resolution - 1)))
 			surface.add_vertex(Vector3(float(ix) * step - half, h, float(iz) * step - half))
 
@@ -172,20 +184,54 @@ func _build_collision() -> void:
 	_collision.scale = Vector3(cell_size(), 1.0, cell_size())
 
 
-## Ground tint by altitude.
+## Ground tint by altitude AND steepness.
+##
+## Altitude alone was not enough: a cliff face and a flat meadow at the same height
+## came out the same green, which is why the island read as one smooth painted lump
+## whatever its shape. Slope is what separates them, and it costs nothing — the
+## heightmap already has the neighbours needed to measure it.
+##
+## Blended rather than stepped at every boundary. Hard thresholds produce contour
+## bands, which look like a topographic map rather than ground.
 ##
 ## Converted to linear because the renderer consumes vertex colours as linear
-## values: handed sRGB numbers directly, a 0.35 green displays as a washed-out
-## mint and the rock band reads as snow.
-func _colour_for_height(h: float) -> Color:
-	var colour: Color
-	if h < 1.2:
-		colour = Color(0.78, 0.71, 0.50)  # sand
-	elif h > height_scale * 0.66:
-		colour = Color(0.46, 0.44, 0.42)  # exposed rock
-	else:
-		colour = Color(0.28, 0.42, 0.18).lerp(Color(0.36, 0.50, 0.22), fmod(h, 1.0))
+## values: handed sRGB numbers directly, a 0.35 green displays as a washed-out mint
+## and the rock band reads as snow.
+func _colour_for_surface(h: float, steepness: float) -> Color:
+	# Grass first, varying slightly with height so a hillside is not one flat wash.
+	var grass: Color = GRASS_LOW.lerp(GRASS_HIGH, clampf(h / height_scale, 0.0, 1.0))
+
+	# Sand along the tideline, fading out rather than stopping at a line.
+	var colour: Color = grass.lerp(SAND, 1.0 - smoothstep(0.0, sand_band, h))
+
+	# Rock wherever the ground is steep, at any height, and on the bare peaks. This
+	# is the term that was missing: cliffs are rock because they are cliffs, not
+	# because of how high they happen to be.
+	var rock_from_slope: float = smoothstep(rock_slope_start, rock_slope_full, steepness)
+	var rock_from_height: float = smoothstep(
+		height_scale * 0.60, height_scale * 0.78, h
+	)
+	colour = colour.lerp(ROCK, clampf(maxf(rock_from_slope, rock_from_height), 0.0, 1.0))
 	return colour.srgb_to_linear()
+
+
+## How steep the ground is at a sample, as 0 flat to 1 vertical.
+##
+## Measured by central difference across the heightmap rather than from the mesh
+## normals, because the colour is needed while the vertices are being written and
+## generate_normals() has not run yet.
+func _steepness_at(ix: int, iz: int) -> float:
+	var step: float = cell_size()
+	var left: float = _sample(maxi(ix - 1, 0), iz)
+	var right: float = _sample(mini(ix + 1, resolution - 1), iz)
+	var back: float = _sample(ix, maxi(iz - 1, 0))
+	var front: float = _sample(ix, mini(iz + 1, resolution - 1))
+	var slope_x: float = (right - left) / (step * 2.0)
+	var slope_z: float = (front - back) / (step * 2.0)
+	var gradient: float = sqrt(slope_x * slope_x + slope_z * slope_z)
+	# atan turns a gradient into an angle, so the value saturates sensibly instead
+	# of running away on a cliff.
+	return clampf(atan(gradient) / (PI * 0.5), 0.0, 1.0)
 
 
 func _ground_material() -> StandardMaterial3D:
