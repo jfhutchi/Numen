@@ -154,8 +154,12 @@ func _spawn_creature() -> void:
 	creature.name = "Creature"
 	add_child(creature)
 	# Beside the home village, so the first thing it meets is the people the
-	# player will be teaching it about.
-	creature.global_position = home_village.centre_position() + Vector3(9.0, 1.5, 9.0)
+	# player will be teaching it about — but only if that spot is dry. A blind
+	# offset put it in the sea whenever the village settled near a shore, and it
+	# sank without a floor to catch it.
+	creature.global_position = _land_near(
+		home_village.centre_position(), 9.0
+	) + Vector3.UP * 1.5
 	creature.configure(_registry, island, null, _master_seed())
 	creature.chose.connect(_on_creature_chose)
 
@@ -170,9 +174,12 @@ func _build_miracles() -> void:
 	prayer = PrayerPower.new()
 	influence = Influence.new(null, home_village.centre_position())
 	library = MiracleLibrary.new()
-	# The village must be passed, or a wood miracle silently grows trees on the
-	# village square instead of filling the storehouse.
-	effects = MiracleEffects.new(_registry, rng, home_village)
+	# BOTH villages, not just the home one. They share the object registry, so a
+	# miracle cast over the rival village finds its fields and villagers and plays
+	# an effect on them — but with only home_village bound, nothing actually
+	# changed and the cast reported zero. Casting kind miracles near the rival is
+	# precisely how its belief is earned, so that was the main path broken.
+	effects = MiracleEffects.new(_registry, rng, [home_village, rival_village])
 	caster = MiracleCaster.new(prayer, influence, library)
 	caster.bind_effects(effects)
 	caster.cast_performed.connect(_on_cast_performed)
@@ -403,6 +410,19 @@ func _update_status() -> void:
 		home_village.population(), rival_village.population(),
 		conversion.converted_count(),
 	]
+
+
+## A dry spot roughly `radius` from `origin`, tried around a full circle before
+## giving up and returning the origin itself.
+func _land_near(origin: Vector3, radius: float) -> Vector3:
+	for i in 12:
+		var angle: float = TAU * float(i) / 12.0
+		var x: float = origin.x + cos(angle) * radius
+		var z: float = origin.z + sin(angle) * radius
+		var h: float = island.height_at(x, z)
+		if h > 1.0:
+			return Vector3(x, h, z)
+	return origin
 
 
 func _random_land_point(rng: RandomNumberGenerator) -> Vector3:
