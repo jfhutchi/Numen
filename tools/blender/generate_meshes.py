@@ -45,6 +45,7 @@ LEAF_LIGHT = (0.26, 0.47, 0.19)
 SOIL = (0.28, 0.20, 0.13)
 WHEAT = (0.72, 0.60, 0.24)
 CLOTH = (0.55, 0.42, 0.32)
+HAND_SKIN = (0.80, 0.66, 0.52)
 SKIN = (0.72, 0.56, 0.44)
 
 
@@ -142,7 +143,126 @@ def export(name: str, objects: list) -> str:
     return path
 
 
+def export_hierarchy(name: str, parts: list) -> str:
+    """Writes the objects WITHOUT joining them, so their names survive into Godot.
+
+    Everything else here is joined into one mesh, because a village of thirty huts
+    as thirty five-child nodes is thirty times the scene-tree cost for no gain.
+    The hand is the exception: Godot curls its fingers by rotating them, so each
+    finger has to arrive as a node of its own. Joining it would produce a rigid
+    lump that could never close.
+    """
+    bpy.ops.object.select_all(action="DESELECT")
+    for obj in parts:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = parts[0]
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+    path = os.path.join(OUT_DIR, "%s.glb" % name)
+    bpy.ops.export_scene.gltf(
+        filepath=os.path.abspath(path),
+        export_format="GLB",
+        use_selection=True,
+        export_apply=True,
+        export_yup=True,
+    )
+    print("WROTE %s (%d parts, hierarchy kept)" % (path, len(parts)))
+    bpy.ops.object.select_all(action="DESELECT")
+    for obj in parts:
+        obj.select_set(True)
+    bpy.ops.object.delete()
+    return path
+
+
 # --- the meshes ---------------------------------------------------------------
+
+def build_hand() -> list:
+    """The divine hand: the player's whole presence in the world.
+
+    The game is built around acting through a hand and the hand had no mesh at
+    all — you moved an invisible point and things happened. This is the single
+    biggest fidelity gap the project had.
+
+    Built palm-down with the fingers along -Y, which the Y-up export turns into
+    Godot's +Z: the same forward axis the creature steers by, so the hand can be
+    aimed with the same `atan2(x, z)` everything else uses.
+
+    Origin is the palm centre rather than the base, unlike every other mesh here.
+    The hand floats and pivots, so it wants its origin where it rotates, and
+    Godot must therefore NOT apply the usual base-at-y=0 offset to it.
+
+    Every joint is a separate named object and is exported unjoined, so Godot can
+    curl the fingers by rotating them. Each finger's origin sits at its knuckle,
+    which is the point it must rotate about.
+    """
+    skin = material("hand_skin", HAND_SKIN, roughness=0.55)
+
+    # Proportions matter more than detail at this poly count. The first attempt
+    # read unmistakably as a mitten, for three reasons, all fixed here: the palm
+    # was nearly as thick as it was wide, the fingers were shorter than the palm
+    # (on a hand they are about the same length), and the thumb sat inside the
+    # palm's own footprint instead of out beside it.
+    palm = box((1.00, 0.86, 0.18), (0.0, 0.0, 0.0), skin)
+    palm.name = "palm"
+    parts = [palm]
+
+    # Four fingers off the front edge, each about as long as the palm, splayed so
+    # the silhouette reads as a hand rather than a paddle. Named by index so Godot
+    # can curl them with a per-finger phase and the close looks like a grasp
+    # rather than a snap.
+    for index, offset_x in enumerate((-0.345, -0.115, 0.115, 0.345)):
+        # Middle fingers longest. That staggered tip line is most of what makes a
+        # blocky hand legible.
+        length = (0.66, 0.82, 0.78, 0.60)[index]
+        knuckle = _empty_at("finger_%d" % index, (offset_x, -0.42, 0.0))
+        bone = box((0.145, length, 0.135), (0.0, -length * 0.5, 0.0), skin)
+        bone.name = "finger_%d_bone" % index
+        bone.parent = knuckle
+        knuckle.rotation_euler = (0.0, 0.0, -offset_x * 0.34)
+        parts.append(knuckle)
+        parts.append(bone)
+
+        # A fingertip pad, slightly narrower, so the ends are not flat-cut boxes.
+        tip = box((0.125, 0.16, 0.12), (0.0, -length - 0.06, 0.0), skin)
+        tip.name = "finger_%d_tip" % index
+        tip.parent = knuckle
+        parts.append(tip)
+
+    # Set well out to the side and swung forward, which is the whole difference
+    # between a hand and a mitten. Its knuckle is clear of the palm's footprint.
+    # Swung out sideways, and NEGATIVE on purpose: a positive Z rotation carries
+    # the finger's -Y axis toward +X, so the earlier positive angles were swinging
+    # the thumb across the palm rather than away from it. It measured as spanning
+    # the palm's whole interior and read as a seam drawn on the back of the hand.
+    # Dropped slightly below the palm plane too, so the two do not merge into one
+    # silhouette from above.
+    thumb = _empty_at("thumb", (-0.46, 0.08, -0.04))
+    thumb_bone = box((0.21, 0.58, 0.18), (0.0, -0.29, 0.0), skin)
+    thumb_bone.name = "thumb_bone"
+    thumb_bone.parent = thumb
+    thumb.rotation_euler = (0.0, 0.0, math.radians(-68.0))
+    parts.append(thumb)
+    parts.append(thumb_bone)
+
+    # A slim gold band at the wrist, so the hand ends deliberately rather than
+    # being sliced off. It is a god's hand; it does not need an arm. Kept small —
+    # the first version was a bracelet the size of the palm and dominated it.
+    cuff = cyl(0.33, 0.16, (0.0, 0.50, 0.0), material("cuff", GOLD, roughness=0.35),
+               verts=10, rot=(math.pi / 2.0, 0.0, 0.0))
+    cuff.name = "cuff"
+    parts.append(cuff)
+    return parts
+
+
+def _empty_at(name: str, loc: tuple):
+    """A bare pivot. The finger geometry parents to it so rotating the joint bends
+    the finger about its knuckle rather than about the palm's centre."""
+    bpy.ops.object.empty_add(type="PLAIN_AXES", location=loc)
+    obj = bpy.context.active_object
+    obj.name = name
+    obj.empty_display_size = 0.1
+    return obj
+
 
 def build_hut() -> list:
     """A villager's house: plastered walls, timber corner posts, thatched roof."""
@@ -285,6 +405,11 @@ def main() -> int:
     for name, builder in BUILDERS.items():
         clear_scene()
         written.append(export(name, builder()))
+
+    # Exported unjoined so its finger nodes survive for Godot to curl.
+    clear_scene()
+    written.append(export_hierarchy("hand", build_hand()))
+
     print("GENERATED %d meshes" % len(written))
     return 0
 
