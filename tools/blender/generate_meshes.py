@@ -109,6 +109,67 @@ def sphere(radius, loc, mat, segments=10, rings=6, scale=(1.0, 1.0, 1.0)):
     return _finish(obj, mat, loc)
 
 
+def bake_ao(obj) -> bool:
+    """Bakes ambient occlusion into a COLOR_0 vertex-colour layer on `obj`.
+
+    Why vertex colours: the art direction is flat colours with no texture files,
+    and per-vertex AO is the one thing that makes that read as solid geometry —
+    without it a hut and the hill behind it are two flat planes meeting at a
+    line. glTF carries the layer as COLOR_0, whose spec meaning is "multiply into
+    base colour", and Godot's importer honours that by enabling vertex-colour
+    albedo on the imported materials. No engine-side wiring needed.
+
+    Cycles is required (EEVEE cannot bake) and the scene is restored afterwards.
+    Returns False rather than raising when baking is unavailable, so the meshes
+    still export un-occluded on a machine without a usable Cycles device.
+    """
+    scene = bpy.context.scene
+    previous_engine = scene.render.engine
+    try:
+        mesh = obj.data
+        # A white starting layer: bake failure then means "no darkening", never
+        # "black mesh".
+        layer = mesh.color_attributes.new(name="AO", type="BYTE_COLOR", domain="CORNER")
+        mesh.color_attributes.active_color = layer
+
+        scene.render.engine = "CYCLES"
+        scene.cycles.device = "CPU"
+        # These meshes are a few hundred vertices; high sample counts buy nothing
+        # visible at per-vertex resolution.
+        scene.cycles.samples = 32
+        scene.render.bake.target = "VERTEX_COLORS"
+
+        # Short occlusion reach. Unbounded AO under a wide eave scores a wall's top
+        # corners near-black, and with no mid-face vertices the darkness interpolates
+        # across the entire wall — the first bake turned every hut charcoal.
+        if scene.world is None:
+            scene.world = bpy.data.worlds.new("BakeWorld")
+        scene.world.light_settings.distance = 1.6
+
+        bpy.ops.object.select_all(action="DESELECT")
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.bake(type="AO")
+
+        # Remap toward white. Per-vertex AO on low-poly is a hint, not a render:
+        # full-strength occlusion is physically right and visually wrong here.
+        strength = 0.55
+        for item in layer.data:
+            c = item.color
+            item.color = (
+                1.0 - (1.0 - c[0]) * strength,
+                1.0 - (1.0 - c[1]) * strength,
+                1.0 - (1.0 - c[2]) * strength,
+                1.0,
+            )
+        return True
+    except Exception as error:  # noqa: BLE001 - report and degrade, never abort the export
+        print("AO_BAKE_SKIPPED %s: %s" % (obj.name, error))
+        return False
+    finally:
+        scene.render.engine = previous_engine
+
+
 def export(name: str, objects: list) -> str:
     """Joins the objects into one mesh and writes assets/procedural/meshes/<name>.glb.
 
@@ -127,14 +188,21 @@ def export(name: str, objects: list) -> str:
     joined = bpy.context.active_object
     joined.name = name
 
+    baked = bake_ao(joined)
+    print("AO %s: %s" % (name, "baked" if baked else "skipped"))
+
     os.makedirs(OUT_DIR, exist_ok=True)
     path = os.path.join(OUT_DIR, "%s.glb" % name)
+    # export_vertex_color="ACTIVE" is what carries the baked AO out. The default,
+    # "MATERIAL", only exports COLOR_0 when a material node reads the attribute —
+    # ours are plain Principled colours, so the default silently dropped the bake.
     bpy.ops.export_scene.gltf(
         filepath=os.path.abspath(path),
         export_format="GLB",
         use_selection=True,
         export_apply=True,
         export_yup=True,
+        export_vertex_color="ACTIVE",
     )
     print("WROTE %s" % path)
     bpy.ops.object.select_all(action="DESELECT")
